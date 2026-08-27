@@ -556,7 +556,7 @@ function pageVisitor(){
           <button class="btn-ghost" onclick="$('idcard-file').click()">📷 ถ่าย/เลือกรูปบัตร</button>
           <input type="file" id="idcard-file" accept="image/*" capture="environment" class="hidden" onchange="onIdCard(this)">
           <img id="idcard-preview" class="hidden" style="height:64px;border-radius:8px;border:1px solid var(--line)">
-          <span id="ocr-note" style="font-size:12px;color:var(--faint)">เดโม่: เมื่อเลือกรูป ระบบจะจำลองการอ่าน OCR เติมชื่อ-ที่อยู่ให้ (แก้ไขได้)</span>
+          <span id="ocr-note" style="font-size:12px;color:var(--faint)">ถ่ายบัตรให้ตรง ชัด แสงพอ — ระบบจะอ่านชื่อและที่อยู่มาเติมให้อัตโนมัติ (ตรวจสอบและแก้ไขได้)</span>
         </div></div>
       <div class="field"><label>ชื่อ - นามสกุล *</label><input id="v-name"></div>
       <div class="field"><label>ที่อยู่ *</label><input id="v-addr"></div>
@@ -596,15 +596,105 @@ function onVPhoto(inp){
   };
   rd.readAsDataURL(f);
 }
+/* ---- OCR อ่านบัตรประชาชน (Tesseract.js ทำงานในเครื่อง ไม่ส่งรูปออกไปไหน) ---- */
+let ocrWorker=null;
+function ocrNote(msg,color){const n=$('ocr-note');if(n){n.textContent=msg;n.style.color=color||'var(--faint)'}}
+async function ensureOcr(){
+  if(ocrWorker)return ocrWorker;
+  if(!window.Tesseract){
+    ocrNote('กำลังโหลดตัวอ่านบัตร... (ครั้งแรกใช้เวลาสักครู่)');
+    await new Promise((res,rej)=>{
+      const s=document.createElement('script');
+      s.src='https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+      s.onload=res;s.onerror=()=>rej(new Error('โหลดตัวอ่านไม่ได้ — ตรวจสอบอินเทอร์เน็ต'));
+      document.head.appendChild(s);
+    });
+  }
+  ocrNote('กำลังเตรียมภาษาไทย... (ครั้งแรกใช้เวลาสักครู่)');
+  ocrWorker=await Tesseract.createWorker(['tha','eng'],1,{
+    logger:m=>{if(m.status==='recognizing text')ocrNote('กำลังอ่านบัตร '+Math.round(m.progress*100)+'%','var(--blue)')}
+  });
+  return ocrWorker;
+}
+// ปรับภาพให้อ่านง่ายขึ้น: ขยาย + ขาวดำ + เพิ่มคอนทราสต์
+function prepImage(dataUrl){
+  return new Promise(res=>{
+    const img=new Image();
+    img.onload=()=>{
+      const scale=Math.min(2,Math.max(1,1600/img.width));
+      const c=document.createElement('canvas');
+      c.width=img.width*scale;c.height=img.height*scale;
+      const ctx=c.getContext('2d');
+      ctx.drawImage(img,0,0,c.width,c.height);
+      const d=ctx.getImageData(0,0,c.width,c.height),p=d.data;
+      for(let i=0;i<p.length;i+=4){
+        let g=0.299*p[i]+0.587*p[i+1]+0.114*p[i+2];
+        g=Math.min(255,Math.max(0,(g-128)*1.6+128)); // เพิ่มคอนทราสต์
+        p[i]=p[i+1]=p[i+2]=g;
+      }
+      ctx.putImageData(d,0,0);
+      res(c.toDataURL('image/png'));
+    };
+    img.src=dataUrl;
+  });
+}
+function tidy(s){return s.replace(/[|_~`^]/g,' ').replace(/\s{2,}/g,' ').replace(/^[\s:：.,-]+|[\s:：.,-]+$/g,'').trim()}
+function parseThaiId(text){
+  const lines=text.split(/\r?\n/).map(l=>tidy(l)).filter(l=>l.length>1);
+  const out={};
+  // ชื่อ-สกุลภาษาไทย: หาบรรทัดที่ขึ้นต้นด้วยคำนำหน้า
+  for(const l of lines){
+    const m=l.match(/((?:นางสาว|น\.?\s?ส\.?|นาย|นาง)\s*[ก-๙][ก-๙\s]{2,50})/);
+    if(m){out.name=tidy(m[1]).replace(/\s+/g,' ');break}
+  }
+  // ถ้าไม่เจอไทย ลองภาษาอังกฤษ (Name / Last name)
+  if(!out.name){
+    const fn=text.match(/Name\s*[:：]?\s*((?:Mr|Mrs|Miss|Ms)\.?\s*[A-Za-z]+)/i);
+    const ln=text.match(/Last\s*name\s*[:：]?\s*([A-Za-z]+)/i);
+    if(fn)out.name=tidy(fn[1]+(ln?' '+ln[1]:''));
+  }
+  // ที่อยู่: บรรทัดที่มีคำว่า "ที่อยู่" แล้วต่อบรรทัดถัดไปจนเจอวันออกบัตร
+  const ai=lines.findIndex(l=>/ที่?\s?อยู่/.test(l));
+  if(ai>=0){
+    let addr=lines[ai].replace(/^.*?ที่?\s?อยู่/,'');
+    for(let i=ai+1;i<Math.min(ai+3,lines.length);i++){
+      if(/วันออกบัตร|บัตรหมดอายุ|Date of (Issue|Expiry)|เกิดวันที่/i.test(lines[i]))break;
+      addr+=' '+lines[i];
+    }
+    out.addr=tidy(addr);
+  }
+  // เผื่อไม่มีคำว่าที่อยู่ — หาบรรทัดที่มีเลขที่บ้าน + ตำบล/แขวง/อำเภอ/เขต/จังหวัด
+  if(!out.addr){
+    const l=lines.find(l=>/(ต\.|ตำบล|แขวง|อ\.|อำเภอ|เขต|จ\.|จังหวัด)/.test(l)&&/\d/.test(l));
+    if(l)out.addr=tidy(l);
+  }
+  return out;
+}
 function onIdCard(inp){
   const f=inp.files[0];if(!f)return;
   const rd=new FileReader();
-  rd.onload=()=>{idcardData=rd.result;const img=$('idcard-preview');img.src=idcardData;img.classList.remove('hidden');
-    // จำลอง OCR
-    if(!$('v-name').value)$('v-name').value='นายสมชาย ใจดี';
-    if(!$('v-addr').value)$('v-addr').value='99/1 ถ.พหลโยธิน เขตจตุจักร กรุงเทพฯ 10900';
-    $('ocr-note').textContent='✓ อ่านข้อมูลจากบัตร (จำลอง) — ตรวจสอบ/แก้ไขได้';$('ocr-note').style.color='var(--green)';
-    toast('OCR (จำลอง) เติมชื่อและที่อยู่แล้ว','ok')};
+  rd.onload=async()=>{
+    idcardData=rd.result;
+    const img=$('idcard-preview');img.src=idcardData;img.classList.remove('hidden');
+    try{
+      const prepped=await prepImage(idcardData);
+      const w=await ensureOcr();
+      const {data}=await w.recognize(prepped);
+      const got=parseThaiId(data.text||'');
+      let filled=[];
+      if(got.name&&!$('v-name').value){$('v-name').value=got.name;filled.push('ชื่อ')}
+      if(got.addr&&!$('v-addr').value){$('v-addr').value=got.addr;filled.push('ที่อยู่')}
+      if(filled.length){
+        ocrNote('✓ อ่านได้: '+filled.join(' + ')+' — กรุณาตรวจสอบและแก้ไขให้ถูกต้อง','var(--green)');
+        toast('อ่านข้อมูลจากบัตรแล้ว — ตรวจสอบความถูกต้องด้วย','ok');
+      }else{
+        ocrNote('อ่านตัวหนังสือไม่ชัด — กรุณากรอกเอง (ลองถ่ายใหม่ให้ตรง ชัด และแสงพอ)','var(--orange)');
+      }
+    }catch(err){
+      console.warn('OCR error',err);
+      ocrNote('อ่านบัตรอัตโนมัติไม่ได้ ('+err.message+') — กรุณากรอกเอง','var(--orange)');
+    }
+  };
   rd.readAsDataURL(f);
 }
 function saveVisitor(){

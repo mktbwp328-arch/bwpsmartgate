@@ -362,7 +362,7 @@ function pageDash(){
   const d=today();
   const ins=records.filter(r=>r.date===d&&r.in).length;
   const outs=records.filter(r=>r.date===d&&r.out).length;
-  const inside=records.filter(r=>r.date===d&&r.in&&!r.out).length;
+  const inside=new Set(records.filter(r=>r.date===d&&r.in&&!r.out).map(r=>r.code)).size;
   const vNow=visitors.filter(v=>v.status!=='ออกแล้ว').length;
   const pend=visitors.filter(v=>v.status==='รออนุมัติออก'&&(myRole!=='emp'||v.contactCode===session.code)).length;
   if(myRole==='emp'){
@@ -501,13 +501,13 @@ function doScan(){
   if(!emp){fail('ไม่พบข้อมูล',`ไม่พบรหัสพนักงาน "${esc(code)}" ในระบบ`);return}
   if(!emp.active){fail('ปฏิเสธการเข้า',`${esc(emp.name)} สถานะ Inactive — ไม่มีสิทธิ์เข้าออก`);return}
   const d=today();
-  let rec=records.find(r=>r.code===emp.code&&r.date===d&&!r.out);
+  let rec=openRound(emp.code,d);
   if(scanMode==='in'){
-    if(rec){fail('เช็คอินซ้ำ',`${esc(emp.name)} เช็คอินแล้วเมื่อ ${rec.in} — หากต้องการออกให้เลือกแท็บ "ออก"`);return}
+    if(rec){fail('อยู่ในบริษัทอยู่แล้ว',`${esc(emp.name)} เช็คเข้าไว้เมื่อ ${rec.in} — หากจะออกให้เลือกแท็บ "ออก"`);return}
     rec={type:'emp',code:emp.code,name:emp.name,dept:emp.dept,in:nowTime(),out:null,date:d};records.push(rec);
   }else{
-    if(!rec){fail('ยังไม่ได้เช็คอิน',`${esc(emp.name)} ยังไม่มีรายการเข้าในวันนี้`);return}
-    rec.out=nowTime();
+    if(rec)rec.out=nowTime();
+    else{rec={type:'emp',code:emp.code,name:emp.name,dept:emp.dept,in:null,out:nowTime(),date:d};records.push(rec)}
   }
   persist();
   box.innerHTML=`<div style="text-align:center;padding:14px 6px">
@@ -525,15 +525,25 @@ function doScan(){
 }
 
 /* ================= MY SCAN (พนักงาน) ================= */
-let myMode=null; // 'in' | 'out' — พนักงานเลือกเอง
+/* เข้า-ออกได้หลายรอบต่อวัน (เช่น ออกไปข้างนอกตอนกลางวันแล้วกลับเข้ามา)
+   - 1 record = 1 รอบ {in, out}  ·  out ค้างว่าง = ยังอยู่ในบริษัท
+   - in ว่าง = ออกโดยไม่ได้เช็คเข้า
+   - ข้ามวันเริ่มนับใหม่เสมอ เพราะ record ผูกกับวันที่ */
+function dayEvents(code,d){return records.filter(r=>r.code===code&&r.date===(d||today()))}
+function openRound(code,d){const e=dayEvents(code,d);for(let i=e.length-1;i>=0;i--)if(e[i].in&&!e[i].out)return e[i];return null}
+function isInside(code,d){return !!openRound(code,d)}
+function summarizeDay(code,d){
+  const e=dayEvents(code,d);
+  if(!e.length)return 'ยังไม่มีรายการวันนี้';
+  return e.map(r=>r.in&&r.out?`${r.in}→${r.out}`:r.in?`${r.in}→ (อยู่ในบริษัท)`:`ออก ${r.out} (ไม่ได้เช็คเข้า)`).join(' · ');
+}
+let myMode='out'; // ตั้งต้นที่ "เช็คออก" เพื่อจับคนออกไปข้างนอกระหว่างวัน
 function setMyMode(m){myMode=m;render()}
 function pageMyscan(){
   const me=getUser(session.code);
   const d=today();
-  const rec=records.find(r=>r.code===me.code&&r.date===d&&!r.out);   // เช็คอินค้างอยู่
-  const done=records.find(r=>r.code===me.code&&r.date===d&&r.out);   // ครบรอบแล้ววันนี้
-  if(myMode===null)myMode=rec?'out':'in';                            // ตั้งค่าเริ่มต้นให้ตรงสถานะ
-  const status=rec?`เช็คอินแล้ววันนี้ เวลา ${rec.in} น.`:done?`วันนี้เช็คอิน ${done.in} · เช็คเอาต์ ${done.out}`:'วันนี้ยังไม่ได้เช็คอิน';
+  const inside=isInside(me.code,d);
+  const status=summarizeDay(me.code,d);
   const card=(m,icon,title,sub,color)=>`
     <div onclick="setMyMode('${m}')" style="cursor:pointer;border:2px solid ${myMode===m?color:'var(--line)'};background:${myMode===m?color+'12':'#fff'};border-radius:14px;padding:18px 12px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:6px;min-height:120px;justify-content:center">
       <div style="font-size:30px">${icon}</div>
@@ -547,12 +557,15 @@ function pageMyscan(){
         <div style="width:46px;height:46px;border-radius:50%;background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0">${esc(me.name.replace(/^(นาย|น\.ส\.|นาง)/,'').slice(0,2))}</div>
         <div style="min-width:0"><b>${esc(me.name)}</b><div style="font-size:12.5px;color:var(--muted)">${esc(me.code)} · ${esc(me.dept)}</div></div>
       </div>
-      <div style="background:#F8FAFC;border:1px solid var(--line);border-radius:10px;padding:11px 14px;font-size:13px;color:var(--muted);margin-bottom:16px">📅 ${d} — ${status}</div>
+      <div style="background:${inside?'#F0FDF4':'#F8FAFC'};border:1px solid ${inside?'#86EFAC':'var(--line)'};border-radius:10px;padding:11px 14px;font-size:13px;margin-bottom:16px">
+        <div style="font-weight:700;color:${inside?'#15803D':'var(--muted)'};margin-bottom:2px">${inside?'🟢 สถานะ: อยู่ในบริษัท':'⚪ สถานะ: อยู่นอกบริษัท'}</div>
+        <div style="color:var(--muted);font-size:12.5px">📅 ${d} — ${status}</div>
+      </div>
 
       <div style="font-size:13.5px;font-weight:700;margin-bottom:9px">1. เลือกรายการที่ต้องการ</div>
       <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:18px">
-        ${card('in','➡️','เช็คเข้า','Check In','#16A34A')}
         ${card('out','⬅️','เช็คออก','Check Out','#1D6AE5')}
+        ${card('in','➡️','เช็คเข้า','Check In','#16A34A')}
       </div>
 
       <div style="font-size:13.5px;font-weight:700;margin-bottom:9px">2. กดยืนยัน</div>
@@ -569,21 +582,26 @@ function myscanErr(title,detail){
 function doMyScan(){
   const me=getUser(session.code);
   const d=today();
-  const rec=records.find(r=>r.code===me.code&&r.date===d&&!r.out);
-  const done=records.find(r=>r.code===me.code&&r.date===d&&r.out);
-  // ตรวจความถูกต้องของรายการที่เลือก
-  if(myMode==='in'&&rec){myscanErr('เช็คเข้าซ้ำ',`คุณเช็คเข้าไปแล้วเมื่อ ${rec.in} น. — หากต้องการออกให้เลือก "เช็คออก"`);return}
-  if(myMode==='in'&&done){myscanErr('วันนี้บันทึกครบแล้ว',`เช็คเข้า ${done.in} · เช็คออก ${done.out} — หากต้องมาทำงานรอบใหม่ ติดต่อฝ่ายบุคคล`);return}
-  if(myMode==='out'&&!rec){myscanErr('ยังไม่ได้เช็คเข้า',done?`วันนี้เช็คออกไปแล้วเมื่อ ${done.out} น.`:'ต้องเช็คเข้าก่อนจึงจะเช็คออกได้');return}
+  const open=openRound(me.code,d);
+  if(myMode==='in'&&open){myscanErr('คุณอยู่ในบริษัทอยู่แล้ว',`เช็คเข้าไว้เมื่อ ${open.in} น. — หากจะออกไปข้างนอกให้เลือก "เช็คออก"`);return}
   if(!me.active){myscanErr('ไม่มีสิทธิ์เข้าออก','บัญชีของคุณถูกระงับ (Inactive) — ติดต่อฝ่ายบุคคล');return}
   if(!gps.ok){myscanErr('อยู่นอกพื้นที่ที่กำหนด',`ต้องห่างหมุดบริษัทไม่เกิน ${settings.radius} ม. (ตอนนี้ ${gps.dist??'?'} ม.)`);toast('ปฏิเสธการบันทึก — นอกรัศมี','err');return}
-  const t=nowTime();
-  if(myMode==='out'){rec.out=t;toast('เช็คออกสำเร็จ '+t+' น. — เดินทางกลับปลอดภัย','ok')}
-  else{records.push({type:'emp',code:me.code,name:me.name,dept:me.dept,in:t,out:null,date:d});toast('เช็คเข้าสำเร็จ '+t+' น. — ยินดีต้อนรับ','ok')}
+  const t=nowTime();let note='';
+  if(myMode==='out'){
+    if(open){open.out=t;toast('เช็คออกสำเร็จ '+t+' น.','ok')}
+    else{ // ออกโดยไม่ได้เช็คเข้า — บันทึกไว้เป็นรายการออกอย่างเดียว
+      records.push({type:'emp',code:me.code,name:me.name,dept:me.dept,in:null,out:t,date:d});
+      note='<br><span style="font-size:12.5px;color:#A16207">หมายเหตุ: ไม่พบรายการเช็คเข้า — บันทึกเป็น "ออกโดยไม่ได้เช็คเข้า"</span>';
+      toast('เช็คออกสำเร็จ '+t+' น. (ไม่พบรายการเช็คเข้า)','ok');
+    }
+  }else{
+    records.push({type:'emp',code:me.code,name:me.name,dept:me.dept,in:t,out:null,date:d});
+    toast('เช็คเข้าสำเร็จ '+t+' น. — ยินดีต้อนรับ','ok');
+  }
   persist();
-  const mode=myMode;myMode=null;   // รีเซ็ตให้เดาสถานะใหม่ในครั้งถัดไป
+  const mode=myMode;myMode='out';   // กลับไปตั้งต้นที่ "เช็คออก" เสมอ
   render();
-  $('myscan-result').innerHTML=`<div style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:10px;padding:14px;color:#14532D;font-size:14px;text-align:center"><b>✓ บันทึก${mode==='in'?'เช็คเข้า':'เช็คออก'}สำเร็จ</b><br><span style="font-size:13px">เวลา ${t} น. · ห่างหมุด ${gps.dist} ม.</span></div>`;
+  $('myscan-result').innerHTML=`<div style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:10px;padding:14px;color:#14532D;font-size:14px;text-align:center"><b>✓ บันทึก${mode==='in'?'เช็คเข้า':'เช็คออก'}สำเร็จ</b><br><span style="font-size:13px">เวลา ${t} น. · ห่างหมุด ${gps.dist} ม.</span>${note}</div>`;
 }
 
 /* ================= VISITOR ================= */
@@ -811,7 +829,7 @@ function reportEmp(){
     <tr><th>วันที่</th><th>รหัส</th><th>ชื่อ - นามสกุล</th><th>แผนก</th><th>เวลาเข้า</th><th>เวลาออก</th><th>สถานะ</th></tr>
     ${rows.map(r=>`<tr><td>${esc(r.date)}</td><td style="color:var(--blue);font-weight:600">${esc(r.code)}</td><td style="font-weight:600">${esc(r.name)}</td>
       <td>${esc(r.dept)}</td><td>${r.in||'-'}</td><td>${r.out||'-'}</td>
-      <td><span class="badge ${r.out?'b-green':'b-blue'}">${r.out?'ปกติ':'อยู่ในอาคาร'}</span></td></tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--faint);padding:30px">ยังไม่มีข้อมูล</td></tr>'}
+      <td>${!r.in?'<span class="badge b-yellow">ออกโดยไม่ได้เช็คเข้า</span>':r.out?'<span class="badge b-green">ครบรอบ</span>':'<span class="badge b-blue">อยู่ในบริษัท</span>'}</td></tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--faint);padding:30px">ยังไม่มีข้อมูล</td></tr>'}
   </table></div>`;
 }
 function reportVis(){
@@ -826,14 +844,19 @@ function reportVis(){
 }
 function reportDaily(){
   const days={};
-  records.forEach(r=>{const d=days[r.date]=days[r.date]||{ins:0,outs:0,late:0,inside:0,vis:0};d.ins++;if(r.out)d.outs++;else d.inside++;if(r.in&&r.in>'08:30')d.late++});
+  records.forEach(r=>{const d=days[r.date]=days[r.date]||{ins:0,outs:0,late:0,inside:0,vis:0,noIn:0};
+    if(r.in)d.ins++;if(r.out)d.outs++;
+    if(r.in&&!r.out)d.inside++;
+    if(!r.in&&r.out)d.noIn++;
+    if(r.in&&r.in>'08:30')d.late++});
   visitors.forEach(v=>{const d=days[v.date]=days[v.date]||{ins:0,outs:0,late:0,inside:0,vis:0};d.vis++});
   const keys=Object.keys(days).reverse();
   return `<div class="card" style="overflow-x:auto"><table>
-    <tr><th>วันที่</th><th>เช็คอิน (ครั้ง)</th><th>เช็คเอาต์ (ครั้ง)</th><th>มาสาย (หลัง 08:30)</th><th>ยังอยู่ในอาคาร</th><th>ผู้มาติดต่อ</th></tr>
+    <tr><th>วันที่</th><th>เช็คเข้า (ครั้ง)</th><th>เช็คออก (ครั้ง)</th><th>มาสาย (หลัง 08:30)</th><th>ค้างในบริษัท</th><th>ออกไม่เช็คเข้า</th><th>ผู้มาติดต่อ</th></tr>
     ${keys.map(k=>{const d=days[k];return `<tr><td style="font-weight:600">${esc(k)}</td><td>${d.ins}</td><td>${d.outs}</td>
-      <td>${d.late?`<span class="badge b-yellow">${d.late} คน</span>`:'-'}</td>
-      <td>${d.inside?`<span class="badge b-blue">${d.inside} คน</span>`:'-'}</td><td>${d.vis||'-'}</td></tr>`}).join('')||'<tr><td colspan="6" style="text-align:center;color:var(--faint);padding:30px">ยังไม่มีข้อมูล</td></tr>'}
+      <td>${d.late?`<span class="badge b-yellow">${d.late} ครั้ง</span>`:'-'}</td>
+      <td>${d.inside?`<span class="badge b-blue">${d.inside} คน</span>`:'-'}</td>
+      <td>${d.noIn?`<span class="badge b-yellow">${d.noIn} ครั้ง</span>`:'-'}</td><td>${d.vis||'-'}</td></tr>`}).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--faint);padding:30px">ยังไม่มีข้อมูล</td></tr>'}
   </table></div>`;
 }
 function reportExport(){
@@ -858,7 +881,7 @@ function exportCsv(kind){
     fname='bwp-visitors.csv';
   }else{
     head='วันที่,รหัสพนักงาน,ชื่อ,แผนก,เวลาเข้า,เวลาออก,สถานะ';
-    lines=records.map(r=>[r.date,r.code,r.name,r.dept,r.in||'',r.out||'',r.out?'ปกติ':'อยู่ในอาคาร']);
+    lines=records.map(r=>[r.date,r.code,r.name,r.dept,r.in||'',r.out||'',!r.in?'ออกโดยไม่ได้เช็คเข้า':r.out?'ครบรอบ':'อยู่ในบริษัท']);
     fname='bwp-attendance.csv';
   }
   const csv='﻿'+[head,...lines.map(l=>l.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(','))].join('\n');

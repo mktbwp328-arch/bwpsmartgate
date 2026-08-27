@@ -78,12 +78,15 @@ td{padding:11px 14px;border-top:1px solid var(--line2)}
       <div style="font-size:13.5px;color:var(--muted);margin:4px 0 20px">ล็อกอินด้วยเบอร์โทรที่ผูกกับข้อมูลพนักงาน</div>
       <div class="field"><label>เบอร์โทรศัพท์</label><input id="login-phone" placeholder="เช่น 081-345-6789" inputmode="tel"></div>
       <div id="login-error" class="hidden" style="background:#FEE2E2;border:1px solid #FCA5A5;border-radius:10px;padding:11px 14px;color:#B91C1C;font-size:13px;margin-bottom:13px;line-height:1.55"></div>
-      <div id="otp-box" class="hidden">
-        <div class="field"><label>รหัส OTP <span id="otp-hint" style="color:var(--blue);font-weight:400"></span></label><input id="login-otp" placeholder="กรอกรหัส 6 หลัก" inputmode="numeric" maxlength="6"></div>
+      <div id="pin-box" class="hidden">
+        <div id="pin-who" style="background:#EFF5FF;border:1px solid #BFDBFE;border-radius:10px;padding:10px 13px;font-size:13px;color:#1E40AF;margin-bottom:13px"></div>
+        <div class="field"><label id="pin-label">รหัส PIN 6 หลัก</label><input id="login-pin" type="password" placeholder="••••••" inputmode="numeric" maxlength="6" autocomplete="off"></div>
+        <div id="pin-confirm-field" class="field hidden"><label>ยืนยันรหัส PIN อีกครั้ง</label><input id="login-pin2" type="password" placeholder="••••••" inputmode="numeric" maxlength="6" autocomplete="off"></div>
       </div>
-      <button id="btn-request-otp" class="btn-blue" style="width:100%;padding:13px">ขอรหัส OTP</button>
+      <button id="btn-next" class="btn-blue" style="width:100%;padding:13px">ถัดไป →</button>
       <button id="btn-login" class="btn-blue hidden" style="width:100%;padding:13px">เข้าสู่ระบบ →</button>
-      <div style="font-size:12px;color:var(--faint);text-align:center;margin-top:14px">ใส่เบอร์โทรพนักงาน → เข้าหน้าพนักงาน · เดโม่: OTP จะแสดงบนหน้าจอ</div>
+      <button id="btn-back" class="btn-ghost hidden" style="width:100%;padding:10px;margin-top:8px">← เปลี่ยนเบอร์</button>
+      <div style="font-size:12px;color:var(--faint);text-align:center;margin-top:14px">เข้าครั้งแรกให้ตั้งรหัส PIN ของตัวเอง · ลืมรหัสติดต่อฝ่ายบุคคล</div>
     </div>
   </div>
 </div>
@@ -217,9 +220,21 @@ function updateGpsUI(){
 }
 setInterval(updateGpsUI,10000);
 
-/* ================= LOGIN ================= */
-let currentOtp=null,pendingEmp=null;
-$('btn-request-otp').onclick=()=>{
+/* ================= LOGIN (เบอร์โทร + PIN) ================= */
+let pendingEmp=null,pinMode='enter'; // enter = กรอก PIN เดิม / set = ตั้งใหม่
+async function hashPin(code,pin){
+  const buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode('bwpsg:'+code+':'+pin));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+function loginErr(msg){const b=$('login-error');b.innerHTML=msg;b.classList.remove('hidden')}
+function backToPhone(){
+  pendingEmp=null;
+  $('pin-box').classList.add('hidden');$('btn-login').classList.add('hidden');$('btn-back').classList.add('hidden');
+  $('btn-next').classList.remove('hidden');$('login-error').classList.add('hidden');
+  $('login-pin').value='';$('login-pin2').value='';
+}
+$('btn-back').onclick=backToPhone;
+$('btn-next').onclick=()=>{
   const kw=$('login-phone').value.trim().toLowerCase();
   if(kw==='bwphradmin'){
     session={code:'ADMIN'};persist();enterApp();
@@ -241,16 +256,43 @@ $('btn-request-otp').onclick=()=>{
     box.innerHTML='<b>✕ ไม่สามารถเข้าระบบได้</b><br>บัญชีพนักงาน '+esc(found.code)+' ถูกระงับ (Inactive) — ติดต่อฝ่ายบุคคล';
     box.classList.remove('hidden');toast('บัญชีถูกระงับ (Inactive)','err');return;
   }
-  const emp=found;
-  pendingEmp=emp;currentOtp=String(Math.floor(100000+Math.random()*900000));
-  $('otp-box').classList.remove('hidden');$('btn-request-otp').classList.add('hidden');$('btn-login').classList.remove('hidden');
-  $('otp-hint').textContent=`(เดโม่ — รหัสคือ ${currentOtp})`;
-  toast('ส่ง OTP แล้ว (เดโม่: แสดงบนหน้าจอ)','ok');
+  pendingEmp=found;
+  pinMode=found.pinHash?'enter':'set';
+  $('pin-who').innerHTML=`<b>${esc(found.name)}</b> · ${esc(found.code)}${found.dept?' · '+esc(found.dept):''}`;
+  $('pin-label').textContent=pinMode==='set'?'ตั้งรหัส PIN 6 หลัก (ใช้เข้าระบบครั้งต่อไป)':'รหัส PIN 6 หลัก';
+  $('pin-confirm-field').classList.toggle('hidden',pinMode!=='set');
+  $('pin-box').classList.remove('hidden');
+  $('btn-next').classList.add('hidden');
+  $('btn-login').classList.remove('hidden');$('btn-back').classList.remove('hidden');
+  $('btn-login').textContent=pinMode==='set'?'ตั้งรหัสและเข้าสู่ระบบ →':'เข้าสู่ระบบ →';
+  $('login-pin').focus();
 };
-$('btn-login').onclick=()=>{
-  if($('login-otp').value.trim()!==currentOtp){toast('รหัส OTP ไม่ถูกต้อง','err');return}
+$('login-pin').onkeydown=e=>{if(e.key==='Enter')pinMode==='set'?$('login-pin2').focus():$('btn-login').click()};
+$('login-pin2').onkeydown=e=>{if(e.key==='Enter')$('btn-login').click()};
+$('login-phone').onkeydown=e=>{if(e.key==='Enter')$('btn-next').click()};
+$('btn-login').onclick=async()=>{
+  const pin=$('login-pin').value.trim();
+  $('login-error').classList.add('hidden');
+  if(!/^\d{6}$/.test(pin)){loginErr('รหัส PIN ต้องเป็นตัวเลข 6 หลัก');return}
+  if(pinMode==='set'){
+    if(pin!==$('login-pin2').value.trim()){loginErr('รหัส PIN ทั้งสองช่องไม่ตรงกัน');return}
+    if(/^(\d)\1{5}$/.test(pin)||['123456','654321','012345'].includes(pin)){loginErr('รหัส PIN คาดเดาง่ายเกินไป — เลือกเลขอื่น');return}
+    const emp=employees.find(e=>e.code===pendingEmp.code);
+    emp.pinHash=await hashPin(emp.code,pin);
+    session={code:emp.code};persist();enterApp();
+    toast('ตั้งรหัส PIN เรียบร้อย — ครั้งต่อไปใช้รหัสนี้เข้าระบบ','ok');return;
+  }
+  const h=await hashPin(pendingEmp.code,pin);
+  if(h!==pendingEmp.pinHash){
+    pinFail[pendingEmp.code]=(pinFail[pendingEmp.code]||0)+1;
+    if(pinFail[pendingEmp.code]>=5){loginErr('<b>✕ กรอกรหัสผิดเกิน 5 ครั้ง</b><br>ติดต่อฝ่ายบุคคลเพื่อรีเซ็ตรหัส PIN');return}
+    loginErr('รหัส PIN ไม่ถูกต้อง (ผิด '+pinFail[pendingEmp.code]+'/5 ครั้ง)');
+    $('login-pin').value='';$('login-pin').focus();return;
+  }
+  pinFail[pendingEmp.code]=0;
   session={code:pendingEmp.code};persist();enterApp();
 };
+const pinFail={};
 function logout(){session=null;persist();location.reload()}
 
 /* ================= NAV / PAGES ================= */
@@ -350,10 +392,18 @@ function pageEmp(){
 function renderEmpTable(){
   const q=($('emp-search')?.value||'').toLowerCase();
   const list=employees.filter(e=>!q||[e.code,e.name,e.dept,e.pos,e.phone].join(' ').toLowerCase().includes(q));
-  $('emp-table').innerHTML=`<tr><th>รหัส</th><th>ชื่อ - นามสกุล</th><th>แผนก</th><th>ตำแหน่ง</th><th>เบอร์โทร</th><th>สถานะ</th><th>จัดการ</th></tr>`+
+  $('emp-table').innerHTML=`<tr><th>รหัส</th><th>ชื่อ - นามสกุล</th><th>แผนก</th><th>ตำแหน่ง</th><th>เบอร์โทร</th><th>PIN</th><th>สถานะ</th><th>จัดการ</th></tr>`+
   list.map((e,i)=>`<tr><td style="color:var(--blue);font-weight:600">${esc(e.code)}</td><td>${esc(e.name)}</td><td>${esc(e.dept)}</td><td>${esc(e.pos)}</td><td>${esc(e.phone)}</td>
+    <td>${e.pinHash?'<span class="badge b-green">ตั้งแล้ว</span>':'<span class="badge b-yellow">ยังไม่ตั้ง</span>'}</td>
     <td><span class="badge ${e.active?'b-green':'b-yellow'}" style="cursor:pointer" onclick="toggleEmp('${esc(e.code)}')">${e.active?'Active':'Inactive'}</span></td>
-    <td><button class="btn-ghost" style="padding:5px 10px" onclick="empModal('${esc(e.code)}')">✏️</button> <button class="btn-ghost" style="padding:5px 10px;color:var(--red)" onclick="delEmp('${esc(e.code)}')">🗑️</button></td></tr>`).join('');
+    <td style="white-space:nowrap"><button class="btn-ghost" style="padding:5px 10px" title="แก้ไข" onclick="empModal('${esc(e.code)}')">✏️</button> <button class="btn-ghost" style="padding:5px 10px" title="รีเซ็ตรหัส PIN" onclick="resetPin('${esc(e.code)}')">🔑</button> <button class="btn-ghost" style="padding:5px 10px;color:var(--red)" title="ลบ" onclick="delEmp('${esc(e.code)}')">🗑️</button></td></tr>`).join('');
+}
+function resetPin(code){
+  const e=employees.find(x=>x.code===code);
+  if(!e.pinHash){toast(e.code+' ยังไม่ได้ตั้ง PIN','err');return}
+  if(!confirm('รีเซ็ตรหัส PIN ของ '+e.name+' ?\nพนักงานจะตั้งรหัสใหม่เองตอนล็อกอินครั้งถัดไป'))return;
+  delete e.pinHash;persist();renderEmpTable();
+  toast('รีเซ็ต PIN ของ '+e.code+' แล้ว','ok');
 }
 function toggleEmp(code){const e=employees.find(x=>x.code===code);e.active=!e.active;persist();renderEmpTable();toast(`${e.code} → ${e.active?'Active พร้อมใช้งานที่จุดสแกน':'Inactive'}`,'ok')}
 function delEmp(code){if(!confirm('ลบพนักงาน '+code+' ?'))return;employees=employees.filter(e=>e.code!==code);persist();renderEmpTable()}

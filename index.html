@@ -179,7 +179,8 @@ async function sbLoad(){
     if(m.visitors)visitors=m.visitors;else sbPush('visitors',visitors);
     if(m.settings)settings={...settings,...m.settings};else sbPush('settings',settings);
     save('employees',employees);save('records',records);save('visitors',visitors);save('settings',settings);
-    if(!$('app').classList.contains('hidden'))render();
+    if($('app').classList.contains('hidden')){if(typeof bootSession==='function')bootSession()} // ข้อมูลเพิ่งมาถึง — ลองเข้าระบบอีกครั้ง
+    else render();
     console.log('Supabase sync: online');
   }catch(e){sbOnline=false;console.warn('Supabase offline — ใช้ข้อมูลในเครื่อง:',e.message)}
   const dot=$('cloud-dot');if(dot){dot.style.background=sbOnline?'#22C55E':'#EAB308';dot.title=sbOnline?'ซิงก์กับ Supabase แล้ว':'ออฟไลน์ — ข้อมูลอยู่ในเครื่องเท่านั้น'}
@@ -524,38 +525,65 @@ function doScan(){
 }
 
 /* ================= MY SCAN (พนักงาน) ================= */
+let myMode=null; // 'in' | 'out' — พนักงานเลือกเอง
+function setMyMode(m){myMode=m;render()}
 function pageMyscan(){
-  const me=employees.find(e=>e.code===session.code);
+  const me=getUser(session.code);
   const d=today();
-  const rec=records.find(r=>r.code===me.code&&r.date===d&&!r.out);
-  const done=records.find(r=>r.code===me.code&&r.date===d&&r.out);
-  const mode=rec?'out':'in';
+  const rec=records.find(r=>r.code===me.code&&r.date===d&&!r.out);   // เช็คอินค้างอยู่
+  const done=records.find(r=>r.code===me.code&&r.date===d&&r.out);   // ครบรอบแล้ววันนี้
+  if(myMode===null)myMode=rec?'out':'in';                            // ตั้งค่าเริ่มต้นให้ตรงสถานะ
+  const status=rec?`เช็คอินแล้ววันนี้ เวลา ${rec.in} น.`:done?`วันนี้เช็คอิน ${done.in} · เช็คเอาต์ ${done.out}`:'วันนี้ยังไม่ได้เช็คอิน';
+  const card=(m,icon,title,sub,color)=>`
+    <div onclick="setMyMode('${m}')" style="cursor:pointer;border:2px solid ${myMode===m?color:'var(--line)'};background:${myMode===m?color+'12':'#fff'};border-radius:14px;padding:18px 12px;text-align:center;display:flex;flex-direction:column;align-items:center;gap:6px;min-height:120px;justify-content:center">
+      <div style="font-size:30px">${icon}</div>
+      <div style="font-size:15px;font-weight:700;color:${myMode===m?color:'var(--text)'}">${title}</div>
+      <div style="font-size:11.5px;color:var(--muted)">${sub}</div>
+      ${myMode===m?`<div style="position:relative;margin-top:2px;font-size:11.5px;font-weight:700;color:${color}">● เลือกอยู่</div>`:''}
+    </div>`;
   return `<div class="page" style="max-width:560px;margin:0 auto">
-    <div class="card" style="padding:24px;text-align:center">
-      <div style="display:flex;align-items:center;gap:12px;justify-content:center;margin-bottom:6px">
-        <div style="width:46px;height:46px;border-radius:50%;background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700">${esc(me.name.replace(/^(นาย|น\.ส\.|นาง)/,'').slice(0,2))}</div>
-        <div style="text-align:left"><b>${esc(me.name)}</b><div style="font-size:12.5px;color:var(--muted)">${esc(me.code)} · ${esc(me.dept)}</div></div>
+    <div class="card" style="padding:20px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px">
+        <div style="width:46px;height:46px;border-radius:50%;background:var(--blue);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;flex-shrink:0">${esc(me.name.replace(/^(นาย|น\.ส\.|นาง)/,'').slice(0,2))}</div>
+        <div style="min-width:0"><b>${esc(me.name)}</b><div style="font-size:12.5px;color:var(--muted)">${esc(me.code)} · ${esc(me.dept)}</div></div>
       </div>
-      <div class="scan-frame" style="min-height:230px;margin:14px 0">
-        <div style="text-align:center"><div style="font-size:48px">${mode==='in'?'📷':'👋'}</div>
-        <div style="font-size:13px;margin-top:6px;color:#A7C4EE">${rec?'เช็คอินแล้วเมื่อ '+rec.in+' น.':done?'วันนี้เช็คเอาต์แล้ว ('+done.in+' - '+done.out+')':'ยังไม่เช็คอินวันนี้'}</div></div>
+      <div style="background:#F8FAFC;border:1px solid var(--line);border-radius:10px;padding:11px 14px;font-size:13px;color:var(--muted);margin-bottom:16px">📅 ${d} — ${status}</div>
+
+      <div style="font-size:13.5px;font-weight:700;margin-bottom:9px">1. เลือกรายการที่ต้องการ</div>
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:18px">
+        ${card('in','➡️','เช็คเข้า','Check In','#16A34A')}
+        ${card('out','⬅️','เช็คออก','Check Out','#1D6AE5')}
       </div>
-      <button class="${mode==='in'?'btn-green':'btn-blue'}" style="width:100%;padding:16px;font-size:16px" onclick="doMyScan()">
-        ${mode==='in'?'➡️ สแกนเข้า (Check In)':'⬅️ สแกนออก (Check Out)'}
+
+      <div style="font-size:13.5px;font-weight:700;margin-bottom:9px">2. กดยืนยัน</div>
+      <button class="${myMode==='in'?'btn-green':'btn-blue'}" style="width:100%;padding:17px;font-size:16.5px" onclick="doMyScan()">
+        ${myMode==='in'?'✓ ยืนยันเช็คเข้า':'✓ ยืนยันเช็คออก'}
       </button>
-      <div style="font-size:12px;color:var(--faint);margin-top:10px">ระบบตรวจตำแหน่ง GPS ก่อนบันทึกทุกครั้ง — ต้องห่างหมุดบริษัทไม่เกิน ${settings.radius} ม.</div>
+      <div style="font-size:12px;color:var(--faint);margin-top:10px;text-align:center">ระบบตรวจตำแหน่ง GPS ก่อนบันทึกทุกครั้ง — ต้องห่างหมุดบริษัทไม่เกิน ${settings.radius} ม.</div>
       <div id="myscan-result" style="margin-top:12px"></div>
     </div></div>`;
 }
+function myscanErr(title,detail){
+  $('myscan-result').innerHTML=`<div style="background:#FEE2E2;border:1px solid #FCA5A5;border-radius:10px;padding:12px 14px;color:#B91C1C;font-size:13.5px;line-height:1.55"><b>✕ ${title}</b><br>${detail}</div>`;
+}
 function doMyScan(){
-  const me=employees.find(e=>e.code===session.code);
-  if(!gps.ok){$('myscan-result').innerHTML=`<div style="background:#FEE2E2;border:1px solid #FCA5A5;border-radius:10px;padding:12px;color:#B91C1C;font-size:13.5px"><b>✕ อยู่นอกพื้นที่ที่กำหนด</b><br>ต้องห่างหมุดบริษัทไม่เกิน ${settings.radius} ม. (ตอนนี้ ${gps.dist??'?'} ม.)</div>`;toast('ปฏิเสธการสแกน — นอกรัศมี','err');return}
-  if(!me.active){toast('สถานะ Inactive — ไม่มีสิทธิ์เข้าออก','err');return}
+  const me=getUser(session.code);
   const d=today();
-  let rec=records.find(r=>r.code===me.code&&r.date===d&&!r.out);
-  if(rec){rec.out=nowTime();toast('เช็คเอาต์สำเร็จ '+rec.out+' น.','ok')}
-  else{records.push({type:'emp',code:me.code,name:me.name,dept:me.dept,in:nowTime(),out:null,date:d});toast('เช็คอินสำเร็จ ยินดีต้อนรับ','ok')}
-  persist();render();
+  const rec=records.find(r=>r.code===me.code&&r.date===d&&!r.out);
+  const done=records.find(r=>r.code===me.code&&r.date===d&&r.out);
+  // ตรวจความถูกต้องของรายการที่เลือก
+  if(myMode==='in'&&rec){myscanErr('เช็คเข้าซ้ำ',`คุณเช็คเข้าไปแล้วเมื่อ ${rec.in} น. — หากต้องการออกให้เลือก "เช็คออก"`);return}
+  if(myMode==='in'&&done){myscanErr('วันนี้บันทึกครบแล้ว',`เช็คเข้า ${done.in} · เช็คออก ${done.out} — หากต้องมาทำงานรอบใหม่ ติดต่อฝ่ายบุคคล`);return}
+  if(myMode==='out'&&!rec){myscanErr('ยังไม่ได้เช็คเข้า',done?`วันนี้เช็คออกไปแล้วเมื่อ ${done.out} น.`:'ต้องเช็คเข้าก่อนจึงจะเช็คออกได้');return}
+  if(!me.active){myscanErr('ไม่มีสิทธิ์เข้าออก','บัญชีของคุณถูกระงับ (Inactive) — ติดต่อฝ่ายบุคคล');return}
+  if(!gps.ok){myscanErr('อยู่นอกพื้นที่ที่กำหนด',`ต้องห่างหมุดบริษัทไม่เกิน ${settings.radius} ม. (ตอนนี้ ${gps.dist??'?'} ม.)`);toast('ปฏิเสธการบันทึก — นอกรัศมี','err');return}
+  const t=nowTime();
+  if(myMode==='out'){rec.out=t;toast('เช็คออกสำเร็จ '+t+' น. — เดินทางกลับปลอดภัย','ok')}
+  else{records.push({type:'emp',code:me.code,name:me.name,dept:me.dept,in:t,out:null,date:d});toast('เช็คเข้าสำเร็จ '+t+' น. — ยินดีต้อนรับ','ok')}
+  persist();
+  const mode=myMode;myMode=null;   // รีเซ็ตให้เดาสถานะใหม่ในครั้งถัดไป
+  render();
+  $('myscan-result').innerHTML=`<div style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:10px;padding:14px;color:#14532D;font-size:14px;text-align:center"><b>✓ บันทึก${mode==='in'?'เช็คเข้า':'เช็คออก'}สำเร็จ</b><br><span style="font-size:13px">เวลา ${t} น. · ห่างหมุด ${gps.dist} ม.</span></div>`;
 }
 
 /* ================= VISITOR ================= */
@@ -915,12 +943,17 @@ async function geocodeAddress(){
 sbLoad();
 // deep-link สำหรับทดสอบ: ?as=EMP002&page=scan
 const _qs=new URLSearchParams(location.search);
-if(_qs.get('as')&&getUser(_qs.get('as'))){session={code:_qs.get('as')};persist()}
-if(session&&getUser(session.code)){
-  enterApp();
-  const p=_qs.get('page');
-  if(p&&PAGES.some(x=>x.id===p))go(p);
+function bootSession(){
+  if(_qs.get('as')&&getUser(_qs.get('as'))){session={code:_qs.get('as')};persist()}
+  if(session&&getUser(session.code)){
+    enterApp();
+    const p=_qs.get('page');
+    if(p&&PAGES.some(x=>x.id===p))go(p);
+    return true;
+  }
+  return false;
 }
+bootSession();
 </script>
 </body>
 </html>

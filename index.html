@@ -151,6 +151,7 @@ async function sbLoad(){
     if(j===window._lastSync)return; // ไม่มีอะไรเปลี่ยน — ไม่ต้อง re-render (กันฟอร์มที่กำลังกรอกหาย)
     window._lastSync=j;
     // มีข้อมูลบนคลาวด์ → ใช้ของคลาวด์ / ยังไม่มี → อัปโหลดข้อมูลเครื่องนี้ขึ้นไปตั้งต้น
+    if(m.employees)employees=m.employees;else sbPush('employees',employees);
     if(m.records)records=m.records;else sbPush('records',records);
     if(m.visitors)visitors=m.visitors;else sbPush('visitors',visitors);
     if(m.settings)settings={...settings,...m.settings};else sbPush('settings',settings);
@@ -375,7 +376,10 @@ function saveEmp(code){
 function importCsv(inp){
   const f=inp.files[0];if(!f)return;
   const rd=new FileReader();
+  let retried=false;
   rd.onload=()=>{
+    // CSV จาก Excel ไทยมักเป็นรหัส windows-874 — ถ้าอ่านแล้วตัวอักษรเพี้ยน (�) ให้อ่านใหม่
+    if(!retried&&rd.result.includes('�')){retried=true;rd.readAsText(f,'windows-874');return}
     let n=0;
     rd.result.split(/\r?\n/).forEach(line=>{
       const c=line.split(',').map(s=>s.trim());

@@ -151,7 +151,6 @@ async function sbLoad(){
     if(j===window._lastSync)return; // ไม่มีอะไรเปลี่ยน — ไม่ต้อง re-render (กันฟอร์มที่กำลังกรอกหาย)
     window._lastSync=j;
     // มีข้อมูลบนคลาวด์ → ใช้ของคลาวด์ / ยังไม่มี → อัปโหลดข้อมูลเครื่องนี้ขึ้นไปตั้งต้น
-    if(m.employees){employees=m.employees;if(!employees.some(e=>e.code==='SEC001'))employees.push(SEED_EMPS.find(e=>e.code==='SEC001'))}else sbPush('employees',employees);
     if(m.records)records=m.records;else sbPush('records',records);
     if(m.visitors)visitors=m.visitors;else sbPush('visitors',visitors);
     if(m.settings)settings={...settings,...m.settings};else sbPush('settings',settings);
@@ -163,56 +162,21 @@ async function sbLoad(){
 }
 setInterval(()=>{if(sbOnline)sbLoad()},30000); // ดึงข้อมูลใหม่ทุก 30 วิ (คนอื่นแก้ก็เห็น)
 
-/* ---- ข้อมูลตัวอย่าง (seed อัตโนมัติเมื่อยังไม่มีข้อมูล) ---- */
-const SEED_EMPS=[
-  {code:'EMP001',name:'นายณัฐพงศ์ ใจดี',dept:'ฝ่ายขาย',pos:'พนักงานขาย',phone:'081-234-5678',active:true},
-  {code:'EMP002',name:'น.ส.กมลวรรณ ศรีสุข',dept:'ฝ่ายบัญชี',pos:'เจ้าหน้าที่บัญชี',phone:'081-345-6789',active:true},
-  {code:'EMP003',name:'นายวีรภัทร กล้าหาญ',dept:'ฝ่ายผลิต',pos:'หัวหน้าแผนก',phone:'089-123-4567',active:true},
-  {code:'EMP004',name:'น.ส.สุพัตรา เมืองดี',dept:'ฝ่ายบุคคล',pos:'HR Officer',phone:'081-987-6543',active:true},
-  {code:'EMP005',name:'นายธนกร พัฒนกิจ',dept:'ฝ่ายไอที',pos:'IT Support',phone:'082-111-2233',active:false},
-  {code:'EMP006',name:'น.ส.พิมพ์ชนก วงศ์สว่าง',dept:'ฝ่ายขาย',pos:'พนักงานขาย',phone:'084-222-3344',active:true},
-  {code:'EMP007',name:'นายอภิสิทธิ์ รุ่งเรือง',dept:'ฝ่ายผลิต',pos:'ช่างเทคนิค',phone:'085-333-4455',active:true},
-  {code:'EMP008',name:'น.ส.อรทัย บุญมาก',dept:'ฝ่ายบัญชี',pos:'สมุห์บัญชี',phone:'086-444-5566',active:true},
-  {code:'EMP009',name:'นายจิรายุ ทองแท้',dept:'ฝ่ายจัดซื้อ',pos:'เจ้าหน้าที่จัดซื้อ',phone:'087-555-6677',active:true},
-  {code:'EMP010',name:'น.ส.วราภรณ์ แก้วใส',dept:'ฝ่ายการตลาด',pos:'Marketing Officer',phone:'088-666-7788',active:true},
-  {code:'EMP011',name:'นายพงศกร เข็มทอง',dept:'ฝ่ายไอที',pos:'โปรแกรมเมอร์',phone:'089-777-8899',active:true},
-  {code:'EMP012',name:'น.ส.ชลธิชา น้ำใจงาม',dept:'ฝ่ายบุคคล',pos:'เจ้าหน้าที่ฝึกอบรม',phone:'080-888-9900',active:true},
-  {code:'SEC001',name:'นายสมศักดิ์ เข้มแข็ง',dept:'รักษาความปลอดภัย',pos:'รปภ. ประตู 1',phone:'090-000-1111',active:true},
-];
+let employees=load('employees',[]);
 /* บทบาท: admin = เมนูเต็ม / guard = จุด รปภ. / emp = พนักงานทั่วไป */
 function getRole(e){
   if(!e)return 'emp';
   if(e.code==='ADMIN')return 'admin'; // เข้าด้วยรหัส bwphradmin
-  if(e.code==='SEC001'||/รปภ|รักษาความปลอดภัย/.test(e.dept+e.pos))return 'guard';
+  if(e.code==='SEC001'||/รปภ|รักษาความปลอดภัย/.test((e.dept||'')+(e.pos||'')))return 'guard';
   return 'emp';
 }
 function getUser(code){
   if(code==='ADMIN')return {code:'ADMIN',name:'ผู้ดูแลระบบ',dept:'BWP HR Admin',pos:'',phone:'',active:true};
+  if(code==='SEC001'&&!employees.some(e=>e.code==='SEC001'))return {code:'SEC001',name:'จุดตรวจ รปภ.',dept:'รักษาความปลอดภัย',pos:'รปภ.',phone:'',active:true};
   return employees.find(e=>e.code===code);
 }
-function seedDay(d){const t=new Date();t.setDate(t.getDate()-d);return t.toLocaleDateString('th-TH',{day:'numeric',month:'short',year:'numeric'})}
-function seedRecords(){
-  const D0=seedDay(0),D1=seedDay(1),D2=seedDay(2);
-  const R=(c,i,o,d)=>{const e=SEED_EMPS.find(x=>x.code===c);return{type:'emp',code:c,name:e.name,dept:e.dept,in:i,out:o,date:d}};
-  return [
-    R('EMP001','08:05','17:10',D2),R('EMP002','08:12','17:35',D2),R('EMP003','07:55','18:02',D2),R('EMP006','08:20','17:00',D2),R('EMP008','08:01','17:22',D2),
-    R('EMP001','08:47','17:05',D1),R('EMP002','08:03','17:32',D1),R('EMP004','08:05','18:20',D1),R('EMP007','07:48','16:55',D1),R('EMP009','08:15','17:40',D1),R('EMP010','08:30','17:15',D1),R('EMP011','09:02','18:45',D1),
-    R('EMP001','08:02','17:01',D0),R('EMP002','08:15',null,D0),R('EMP003','07:52',null,D0),R('EMP004','08:08',null,D0),R('EMP006','08:25',null,D0),R('EMP007','07:45','16:50',D0),R('EMP008','08:10',null,D0),R('EMP009','08:33',null,D0),R('EMP011','09:05',null,D0),
-  ];
-}
-function seedVisitors(){
-  const D0=seedDay(0),D1=seedDay(1);
-  return [
-    {id:101,name:'นายสมชาย ใจดี',addr:'99/1 ถ.พหลโยธิน เขตจตุจักร กรุงเทพฯ',company:'บริษัท ซัพพลาย จำกัด',phone:'092-345-6789',contactCode:'EMP002',contactName:'น.ส.กมลวรรณ ศรีสุข',dept:'ฝ่ายบัญชี',purpose:'ส่งเอกสารวางบิล',photo:null,timeIn:'09:10',date:D0,status:'รออนุมัติออก',timeOut:null},
-    {id:102,name:'น.ส.มะลิวัลย์ หอมหวาน',addr:'12 ถ.สุขุมวิท เขตวัฒนา กรุงเทพฯ',company:'บจก. ขนส่งด่วน',phone:'091-111-2222',contactCode:'EMP009',contactName:'นายจิรายุ ทองแท้',dept:'ฝ่ายจัดซื้อ',purpose:'ส่งมอบสินค้าตัวอย่าง',photo:null,timeIn:'10:25',date:D0,status:'กำลังติดต่อ',timeOut:null},
-    {id:103,name:'นายประเสริฐ มั่นคง',addr:'45 ถ.รัชดา เขตห้วยขวาง กรุงเทพฯ',company:'บจก. เอ็นจิเนียริ่งโปร',phone:'093-333-4444',contactCode:'EMP003',contactName:'นายวีรภัทร กล้าหาญ',dept:'ฝ่ายผลิต',purpose:'ตรวจเช็คเครื่องจักรประจำปี',photo:null,timeIn:'08:40',date:D0,status:'ออกแล้ว',timeOut:'11:30'},
-    {id:104,name:'น.ส.ดวงพร แสงจันทร์',addr:'88 ถ.ลาดพร้าว เขตบางกะปิ กรุงเทพฯ',company:'ธนาคารกรุงกลาง',phone:'094-555-6666',contactCode:'EMP008',contactName:'น.ส.อรทัย บุญมาก',dept:'ฝ่ายบัญชี',purpose:'เข้าพบเรื่องสินเชื่อธุรกิจ',photo:null,timeIn:'14:20',date:D1,status:'ออกแล้ว',timeOut:'15:45'},
-  ];
-}
-let employees=load('employees',SEED_EMPS);
-if(!employees.some(e=>e.code==='SEC001'))employees.push(SEED_EMPS.find(e=>e.code==='SEC001')); // เพิ่มบัญชี รปภ. ให้ข้อมูลเก่า
-let records=load('records',seedRecords());   // {type:'emp', code, name, dept, in, out, date}
-let visitors=load('visitors',seedVisitors());// {id,name,addr,company,phone,contactCode,contactName,dept,purpose,photo,timeIn,status,timeOut}
+let records=load('records',[]);   // {type:'emp', code, name, dept, in, out, date}
+let visitors=load('visitors',[]);// {id,name,addr,company,phone,contactCode,contactName,dept,purpose,photo,timeIn,status,timeOut}
 let settings=load('settings',{company:'',address:'',lat:null,lng:null,radius:50,simulate:true,simInRange:true});
 let session=load('session',null);
 const persist=()=>{save('employees',employees);save('records',records);save('visitors',visitors);save('settings',settings);save('session',session);

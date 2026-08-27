@@ -135,14 +135,18 @@ async function sbFetch(path,opts={}){
   if(!res.ok)throw new Error('sb '+res.status+' '+await res.text());
   const t=await res.text();return t?JSON.parse(t):null;
 }
+let sbPending=0;
 function sbPush(key,data){
   if(!sbOnline)return;
+  sbPending++;
   sbFetch('smartgate_store?on_conflict=key',{method:'POST',
     headers:{'Prefer':'resolution=merge-duplicates'},
     body:JSON.stringify([{key,data,updated_at:new Date().toISOString()}])
-  }).catch(e=>{console.warn('sync fail',e);});
+  }).catch(e=>{console.warn('sync fail',e);toast('ซิงก์ไม่สำเร็จ — ข้อมูลถูกเก็บในเครื่องไว้ก่อน','err')})
+    .finally(()=>{sbPending--});
 }
 async function sbLoad(){
+  if(sbPending>0)return; // กำลังอัปโหลดอยู่ — อย่าเพิ่งดึงทับ (กันข้อมูลที่เพิ่งบันทึกหาย)
   try{
     const rows=await sbFetch('smartgate_store?select=key,data');
     sbOnline=true;
@@ -285,6 +289,7 @@ function render(){
   $('mobilenav').innerHTML=PAGES.slice(0,5).map(p=>`<div onclick="go('${p.id}')" style="display:flex;flex-direction:column;align-items:center;gap:2px;font-size:10.5px;cursor:pointer;color:${p.id===cur?'var(--blue)':'var(--faint)'};font-weight:${p.id===cur?700:400}"><span style="font-size:19px">${p.icon}</span>${p.title}</div>`).join('');
   const pg=PAGES.find(p=>p.id===cur);$('page-title').textContent=pg.title;
   $('pages').innerHTML=({dash:pageDash,emp:pageEmp,scan:pageScan,myscan:pageMyscan,visitor:pageVisitor,approve:pageApprove,report:pageReport,settings:pageSettings})[cur]();
+  if(cur==='emp')renderEmpTable();
   updateGpsUI();
 }
 

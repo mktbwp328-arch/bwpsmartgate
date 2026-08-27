@@ -687,9 +687,10 @@ function pageSettings(){
       <div class="field"><label>Longitude</label><input id="s-lng" value="${settings.lng??''}" placeholder="เช่น 100.5018"></div>
     </div>
     <div class="field"><label>รัศมีที่อนุญาต (เมตร)</label><input id="s-radius" type="number" value="${settings.radius}"></div>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;align-items:center">
       <button class="btn-ghost" onclick="pinHere()">📌 ใช้ตำแหน่งปัจจุบันเป็นหมุดบริษัท</button>
       <button class="btn-blue" onclick="saveSettings()">บันทึกการตั้งค่า</button>
+      ${settings.lat?`<a href="https://www.google.com/maps/search/?api=1&query=${settings.lat},${settings.lng}" target="_blank" rel="noopener" style="font-size:13px;font-weight:600">🗺️ ดูหมุดใน Google Maps</a>`:''}
     </div>
     <div style="border-top:1px solid var(--line2);padding-top:16px">
       <div style="font-weight:700;margin-bottom:10px">โหมดจำลอง GPS (สำหรับทดสอบ)</div>

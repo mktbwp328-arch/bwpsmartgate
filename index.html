@@ -138,6 +138,7 @@ td{padding:11px 14px;border-top:1px solid var(--line2)}
 <div id="toast"></div>
 <div id="modal-root"></div>
 <div id="big-result"></div>
+<div id="photo-view"></div>
 
 <script>
 /* ================= STATE ================= */
@@ -814,28 +815,34 @@ function pageVisitor(){
     <div class="card" style="padding:20px">
       <div style="font-weight:700;margin-bottom:14px">ผู้มาติดต่อวันนี้</div>
       ${visitors.slice().reverse().map(v=>`<div style="border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px;font-size:13.5px">
-        <div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(v.name)}</b><span class="badge ${v.status==='ออกแล้ว'?'b-green':v.status==='รออนุมัติออก'?'b-yellow':'b-blue'}">${esc(v.status)}</span></div>
+        <div style="display:flex;justify-content:space-between;gap:8px"><b style="cursor:pointer" onclick="viewVisitor(${v.id})" title="กดเพื่อดูรูป">${(v.photo||v.idcard)?'🖼️ ':''}${esc(v.name)}</b><span class="badge ${v.status==='ออกแล้ว'?'b-green':v.status==='รออนุมัติออก'?'b-yellow':'b-blue'}">${esc(v.status)}</span></div>
         <div style="color:var(--muted);margin-top:3px">พบ ${esc(v.contactName)} · ${esc(v.dept)} · เข้า ${v.timeIn}${v.timeOut?' · ออก '+v.timeOut:''}</div>
         ${v.status==='กำลังติดต่อ'?`<button class="btn-ghost" style="margin-top:8px;padding:6px 12px;font-size:12.5px" onclick="reqOut(${v.id})">ผู้มาติดต่อจะกลับ — ส่งขออนุมัติออก</button>`:''}
       </div>`).join('')||'<div style="color:var(--faint);font-size:13.5px">ยังไม่มีผู้มาติดต่อ</div>'}
     </div></div></div>`;
 }
 let idcardData=null,vphotoData=null;
+function shrink(dataUrl,maxW,q){   // ย่อรูปก่อนเก็บ (พื้นที่จำกัด)
+  return new Promise(res=>{
+    const img=new Image();
+    img.onload=()=>{
+      const s=Math.min(1,maxW/img.width);
+      const c=document.createElement('canvas');
+      c.width=Math.round(img.width*s);c.height=Math.round(img.height*s);
+      c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+      res(c.toDataURL('image/jpeg',q));
+    };
+    img.onerror=()=>res(dataUrl);
+    img.src=dataUrl;
+  });
+}
 function onVPhoto(inp){
   const f=inp.files[0];if(!f)return;
   const rd=new FileReader();
-  rd.onload=()=>{
-    // ย่อรูปก่อนเก็บ (localStorage มีพื้นที่จำกัด)
-    const img=new Image();
-    img.onload=()=>{
-      const c=document.createElement('canvas');const s=Math.min(1,320/img.width);
-      c.width=img.width*s;c.height=img.height*s;
-      c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-      vphotoData=c.toDataURL('image/jpeg',0.75);
-      $('vphoto-box').innerHTML=`<img src="${vphotoData}" style="width:100%;height:100%;object-fit:cover">`;
-      toast('บันทึกรูปผู้มาติดต่อแล้ว','ok');
-    };
-    img.src=rd.result;
+  rd.onload=async()=>{
+    vphotoData=await shrink(rd.result,360,0.72);
+    $('vphoto-box').innerHTML=`<img src="${vphotoData}" style="width:100%;height:100%;object-fit:cover">`;
+    toast('บันทึกรูปผู้มาติดต่อแล้ว','ok');
   };
   rd.readAsDataURL(f);
 }
@@ -917,10 +924,11 @@ function onIdCard(inp){
   const f=inp.files[0];if(!f)return;
   const rd=new FileReader();
   rd.onload=async()=>{
-    idcardData=rd.result;
+    const original=rd.result;
+    idcardData=await shrink(original,700,0.72);   // เก็บแบบย่อ (อ่าน OCR จากรูปเต็ม)
     const img=$('idcard-preview');img.src=idcardData;img.classList.remove('hidden');
     try{
-      const prepped=await prepImage(idcardData);
+      const prepped=await prepImage(original);
       const w=await ensureOcr();
       const {data}=await w.recognize(prepped);
       const got=parseThaiId(data.text||'');
@@ -945,8 +953,9 @@ function saveVisitor(){
   if(!v('v-name')||!v('v-addr')){toast('กรอกชื่อและที่อยู่ให้ครบ','err');return}
   const c=employees.find(e=>e.code===$('v-contact').value);
   visitors.push({id:Date.now(),name:v('v-name'),addr:v('v-addr'),company:v('v-company'),phone:v('v-phone'),
-    contactCode:c.code,contactName:c.name,dept:c.dept,purpose:v('v-purpose'),photo:vphotoData,
-    timeIn:nowTime(),date:today(),status:'กำลังติดต่อ',timeOut:null});
+    contactCode:c.code,contactName:c.name,dept:c.dept,purpose:v('v-purpose'),
+    photo:vphotoData,idcard:idcardData,
+    timeIn:nowTime(),date:today(),dayKey:dayKey(),status:'กำลังติดต่อ',timeOut:null});
   idcardData=null;vphotoData=null;persist();render();
   toast(`บันทึกแล้ว — ส่งแจ้งเตือนไปยัง ${c.name} (${c.dept})`,'ok');
 }
@@ -961,7 +970,7 @@ function pageApprove(){
     ${list.map(v=>`<div class="card" style="padding:18px 20px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
         <div style="display:flex;gap:12px">
-          <div style="width:56px;height:68px;border-radius:9px;background:var(--line2);overflow:hidden;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:24px">${v.photo?`<img src="${v.photo}" style="width:100%;height:100%;object-fit:cover">`:'👤'}</div>
+          <div onclick="viewVisitor(${v.id})" title="กดเพื่อดูรูปจาก รปภ." style="width:56px;height:68px;border-radius:9px;background:var(--line2);overflow:hidden;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:24px;cursor:pointer">${v.photo?`<img src="${v.photo}" style="width:100%;height:100%;object-fit:cover">`:'👤'}</div>
           <div><b style="font-size:15px">${esc(v.name)}</b> ${v.contactCode===me?'<span class="badge b-purple">ติดต่อคุณ</span>':''}<div style="font-size:13px;color:var(--muted);margin-top:3px">${esc(v.company||'-')} · ${esc(v.purpose||'-')}<br>พบ ${esc(v.contactName)} (${esc(v.dept)}) · เข้า ${v.timeIn} · ${v.date}</div></div>
         </div>
         <span class="badge ${v.status==='รออนุมัติออก'?'b-yellow':'b-blue'}" style="align-self:flex-start">${esc(v.status)}</span>
@@ -1009,17 +1018,22 @@ async function repLoad(){
   repRows=rows||records.filter(r=>{const q=repQ.toLowerCase();return !q||[r.code,r.name,r.dept].join(' ').toLowerCase().includes(q)});
   repLoading=false;render();
 }
-function repBar(){
+function repBar(kind){
   repDefaults();
+  const vis=kind==='vis';
   return `<div class="card" style="padding:12px 14px;margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
     <span style="font-size:13px;font-weight:600;color:#334155">วันที่</span>
     <input type="date" id="rep-from" value="${repFrom}" style="width:auto">
     <span style="color:var(--muted)">-</span>
     <input type="date" id="rep-to" value="${repTo}" style="width:auto">
-    <input id="rep-q" value="${esc(repQ)}" placeholder="🔍 ค้นหาชื่อ / รหัส / แผนก" style="flex-grow:1;min-width:180px" onkeydown="if(event.key==='Enter')repLoad()">
-    <button class="btn-blue" onclick="repLoad()">ค้นหา</button>
-    ${recTable?'':'<span style="font-size:12px;color:#A16207">⚠ ยังไม่ได้สร้างตารางประวัติ — แสดงเฉพาะข้อมูลในระบบเดิม</span>'}
+    <input id="rep-q" value="${esc(repQ)}" placeholder="${vis?'🔍 ค้นหาชื่อ / บริษัท / ผู้ถูกติดต่อ':'🔍 ค้นหาชื่อ / รหัส / แผนก'}" style="flex-grow:1;min-width:180px" onkeydown="if(event.key==='Enter')${vis?'repApplyVis()':'repLoad()'}">
+    <button class="btn-blue" onclick="${vis?'repApplyVis()':'repLoad()'}">ค้นหา</button>
+    ${!vis&&!recTable?'<span style="font-size:12px;color:#A16207">⚠ ยังไม่ได้สร้างตารางประวัติ — แสดงเฉพาะข้อมูลในระบบเดิม</span>':''}
   </div>`;
+}
+function repApplyVis(){
+  repFrom=$('rep-from').value||repFrom;repTo=$('rep-to').value||repTo;repQ=$('rep-q').value.trim();
+  render();
 }
 async function delRecord(id){
   if(id==null){toast('รายการนี้ยังไม่ถูกบันทึกลงฐานข้อมูล','err');return}
@@ -1060,14 +1074,50 @@ function reportEmp(){
   </table></div>`;
 }
 function reportVis(){
-  const rows=visitors.slice().reverse();
-  return `<div class="card" style="overflow-x:auto"><table>
-    <tr><th>วันที่</th><th>ชื่อ - นามสกุล</th><th>บริษัท</th><th>พบใคร / แผนก</th><th>วัตถุประสงค์</th><th>เข้า</th><th>ออก</th><th>สถานะ</th></tr>
-    ${rows.map(v=>`<tr><td>${esc(v.date)}</td><td style="font-weight:600">${esc(v.name)}</td><td>${esc(v.company||'-')}</td>
+  repDefaults();
+  const q=repQ.toLowerCase();
+  const rows=visitors.slice().reverse().filter(v=>{
+    const k=v.dayKey||(v.id>1e12?dayKey(new Date(v.id)):null);   // รายการเก่า: ดึงวันที่จาก id (timestamp)
+    if(k&&(k<repFrom||k>repTo))return false;
+    return !q||[v.name,v.company,v.contactName,v.dept,v.purpose,v.phone].join(' ').toLowerCase().includes(q);
+  });
+  window._visRows=rows;
+  return repBar('vis')+`<div style="font-size:12.5px;color:var(--muted);margin-bottom:8px">พบ ${rows.length} รายการ</div>
+  <div class="card" style="overflow-x:auto"><table>
+    <tr><th>วันที่</th><th>รูป</th><th>ชื่อ - นามสกุล</th><th>บริษัท</th><th>พบใคร / แผนก</th><th>วัตถุประสงค์</th><th>เข้า</th><th>ออก</th><th>สถานะ</th></tr>
+    ${rows.map(v=>`<tr><td>${esc(v.date)}</td>
+      <td>${(v.photo||v.idcard)?`<img src="${v.photo||v.idcard}" onclick="viewVisitor(${v.id})" title="กดเพื่อดูรูปขนาดเต็ม" style="width:38px;height:46px;object-fit:cover;border-radius:6px;border:1px solid var(--line);cursor:pointer;display:block">`:'<span style="color:var(--faint);font-size:12px">ไม่มีรูป</span>'}</td>
+      <td style="font-weight:600">${esc(v.name)}${v.phone?`<div style="font-size:11.5px;color:var(--faint);font-weight:400">${esc(v.phone)}</div>`:''}</td><td>${esc(v.company||'-')}</td>
       <td>${esc(v.contactName)}<div style="font-size:11.5px;color:var(--faint)">${esc(v.dept)}</div></td><td>${esc(v.purpose||'-')}</td>
       <td>${v.timeIn||'-'}</td><td>${v.timeOut||'-'}</td>
-      <td><span class="badge ${v.status==='ออกแล้ว'?'b-green':v.status==='รออนุมัติออก'?'b-yellow':'b-blue'}">${esc(v.status)}</span></td></tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--faint);padding:30px">ยังไม่มีข้อมูล</td></tr>'}
+      <td><span class="badge ${v.status==='ออกแล้ว'?'b-green':v.status==='รออนุมัติออก'?'b-yellow':'b-blue'}">${esc(v.status)}</span></td></tr>`).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--faint);padding:30px">ไม่พบรายการในช่วงที่เลือก</td></tr>'}
   </table></div>`;
+}
+/* ---- ดูรูปจาก รปภ. ---- */
+function closePhoto(){$('photo-view').innerHTML=''}
+function viewVisitor(id){
+  const v=visitors.find(x=>x.id===id);if(!v)return;
+  const pane=(src,label)=>src
+    ? `<div style="flex:1;min-width:240px"><div style="font-size:12.5px;color:#C3D4EE;margin-bottom:6px">${label}</div><img src="${src}" style="width:100%;border-radius:10px;background:#000;display:block"></div>`
+    : `<div style="flex:1;min-width:240px"><div style="font-size:12.5px;color:#C3D4EE;margin-bottom:6px">${label}</div><div style="background:rgba(255,255,255,.08);border-radius:10px;padding:40px;text-align:center;color:#8FA9CE;font-size:13px">ไม่มีรูป</div></div>`;
+  $('photo-view').innerHTML=`
+  <div style="position:fixed;inset:0;z-index:95;background:rgba(6,14,32,.94);color:#fff;overflow:auto;padding:22px" onclick="if(event.target===this)closePhoto()">
+    <div style="max-width:860px;margin:0 auto">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:16px">
+        <div>
+          <div style="font-size:20px;font-weight:700">${esc(v.name)}</div>
+          <div style="font-size:13px;color:#C3D4EE;margin-top:3px">${esc(v.company||'-')}${v.phone?' · '+esc(v.phone):''}</div>
+          <div style="font-size:13px;color:#C3D4EE">พบ ${esc(v.contactName)} (${esc(v.dept)}) · ${esc(v.date)} เข้า ${v.timeIn||'-'}${v.timeOut?' · ออก '+v.timeOut:''}</div>
+          ${v.addr?`<div style="font-size:12.5px;color:#9DB8E0;margin-top:4px;max-width:560px">🏠 ${esc(v.addr)}</div>`:''}
+        </div>
+        <button onclick="closePhoto()" style="background:rgba(255,255,255,.14);color:#fff;padding:10px 18px;border-radius:9px;font-size:14px;flex-shrink:0">✕ ปิด</button>
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap">
+        ${pane(v.photo,'📸 รูปถ่ายผู้มาติดต่อ')}
+        ${pane(v.idcard,'🪪 รูปบัตรประชาชน')}
+      </div>
+    </div>
+  </div>`;
 }
 function reportDaily(){
   if(repRows===null&&!repLoading){setTimeout(repLoad,0);return repBar()+'<div class="card" style="padding:40px;text-align:center;color:var(--faint)">กำลังโหลด...</div>'}

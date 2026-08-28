@@ -222,6 +222,7 @@ const $=id=>document.getElementById(id);
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const nowTime=()=>new Date().toLocaleTimeString('th-TH',{hour:'2-digit',minute:'2-digit'});
 const today=()=>new Date().toLocaleDateString('th-TH',{day:'numeric',month:'short',year:'numeric'});
+const fullDate=()=>new Date().toLocaleDateString('th-TH',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
 const normPhone=p=>String(p||'').replace(/\D/g,'');
 function toast(msg,cls){const t=document.createElement('div');t.className='toast '+(cls||'');t.textContent=msg;$('toast').appendChild(t);setTimeout(()=>t.remove(),3500)}
 function haversine(a,b,c,d){const R=6371000,r=x=>x*Math.PI/180;const dl=r(c-a),dg=r(d-b);const h=Math.sin(dl/2)**2+Math.cos(r(a))*Math.cos(r(c))*Math.sin(dg/2)**2;return 2*R*Math.asin(Math.sqrt(h))}
@@ -590,8 +591,7 @@ function pageMyscan(){
     </div></div>`;
 }
 /* ---- หน้าจอยืนยันเต็มจอหลังสแกนสำเร็จ ---- */
-let bigTimer=null;
-function closeBig(){clearInterval(bigTimer);$('big-result').innerHTML=''}
+function closeBig(){$('big-result').innerHTML=''}
 function showBigResult(mode,me,t,note){
   const isOut=mode==='out';
   const c1=isOut?'#0B1F3F':'#064E2B', c2=isOut?'#1D6AE5':'#16A34A';
@@ -602,8 +602,8 @@ function showBigResult(mode,me,t,note){
     </div>
     <div style="font-size:34px;font-weight:700;margin-top:14px">${isOut?'เช็คออกแล้ว':'เช็คเข้าแล้ว'}</div>
     <div style="font-size:16px;opacity:.85;margin-top:2px">${isOut?'ออกจากบริษัทเรียบร้อย':'ยินดีต้อนรับกลับ'}</div>
-    <div style="font-size:60px;font-weight:700;letter-spacing:1px;margin:18px 0 4px">${t}</div>
-    <div style="font-size:15px;opacity:.85">${esc(today())}</div>
+    <div style="font-size:60px;font-weight:700;letter-spacing:1px;margin:18px 0 2px">${t} <span style="font-size:24px;font-weight:500;opacity:.85">น.</span></div>
+    <div style="font-size:17px;font-weight:600;opacity:.95">${esc(fullDate())}</div>
     <div style="background:rgba(255,255,255,.13);border-radius:14px;padding:16px 22px;margin-top:22px;max-width:380px;width:100%">
       <div style="font-size:19px;font-weight:700">${esc(me.name)}</div>
       <div style="font-size:14px;opacity:.85;margin-top:3px">${esc(me.code)} · ${esc(me.dept)}</div>
@@ -611,12 +611,7 @@ function showBigResult(mode,me,t,note){
       ${note?`<div style="font-size:13px;background:rgba(255,255,255,.16);border-radius:9px;padding:9px 12px;margin-top:10px;line-height:1.5">${note}</div>`:''}
     </div>
     <button onclick="closeBig()" style="margin-top:26px;background:#fff;color:${c2};font-size:17px;font-weight:700;padding:16px 52px;border-radius:12px">เสร็จสิ้น</button>
-    <div id="big-count" style="font-size:12.5px;opacity:.7;margin-top:12px"></div>
   </div>`;
-  let left=8;
-  const tick=()=>{const el=$('big-count');if(!el)return clearInterval(bigTimer);
-    el.textContent='ปิดอัตโนมัติใน '+left+' วินาที';if(left--<=0)closeBig()};
-  tick();clearInterval(bigTimer);bigTimer=setInterval(tick,1000);
 }
 function myscanErr(title,detail){
   $('myscan-result').innerHTML=`<div style="background:#FEE2E2;border:1px solid #FCA5A5;border-radius:10px;padding:12px 14px;color:#B91C1C;font-size:13.5px;line-height:1.55"><b>✕ ${title}</b><br>${detail}</div>`;

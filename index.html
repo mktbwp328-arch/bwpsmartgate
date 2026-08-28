@@ -177,6 +177,11 @@ async function recLoadDay(k){   // โหลดรายการของวั
   if(!recTable)return null;
   try{return (await sbFetch(`smartgate_records?day_key=eq.${k}&order=id.asc`)).map(fromRow)}catch(e){return null}
 }
+async function recDelete(id){
+  if(!recTable)return false;
+  try{await sbFetch('smartgate_records?id=eq.'+id,{method:'DELETE'});return true}
+  catch(e){console.warn('ลบไม่สำเร็จ',e);toast('ลบไม่สำเร็จ — ตรวจสอบสิทธิ์ในฐานข้อมูล','err');return false}
+}
 async function recQuery(from,to,q){  // สำหรับหน้ารายงาน
   if(!recTable)return null;
   let url=`smartgate_records?day_key=gte.${from}&day_key=lte.${to}&order=day_key.desc,id.desc&limit=3000`;
@@ -1016,16 +1021,42 @@ function repBar(){
     ${recTable?'':'<span style="font-size:12px;color:#A16207">⚠ ยังไม่ได้สร้างตารางประวัติ — แสดงเฉพาะข้อมูลในระบบเดิม</span>'}
   </div>`;
 }
+async function delRecord(id){
+  if(id==null){toast('รายการนี้ยังไม่ถูกบันทึกลงฐานข้อมูล','err');return}
+  const r=(repRows||records).find(x=>x.id===id);
+  if(!confirm(`ลบรายการนี้?\n${r?.name||''} · ${r?.date||''}\nออก ${r?.out||'-'} · เข้า ${r?.in||'-'}\n\nลบแล้วกู้คืนไม่ได้`))return;
+  if(!await recDelete(id))return;
+  if(repRows)repRows=repRows.filter(x=>x.id!==id);
+  records=records.filter(x=>x.id!==id);
+  save('records',records);dashDays=null;render();
+  toast('ลบรายการแล้ว','ok');
+}
+async function delRangeRecords(){
+  const rows=(repRows||[]).filter(r=>r.id!=null);
+  if(!rows.length){toast('ไม่มีรายการให้ลบ','err');return}
+  if(!confirm(`ลบทั้งหมด ${rows.length} รายการที่แสดงอยู่?\nช่วงวันที่ ${repFrom} ถึง ${repTo}${repQ?' · คำค้น "'+repQ+'"':''}\n\nลบแล้วกู้คืนไม่ได้`))return;
+  if(prompt('พิมพ์ ลบ เพื่อยืนยัน')!=='ลบ'){toast('ยกเลิกการลบ','err');return}
+  let n=0;for(const r of rows){if(await recDelete(r.id))n++}
+  const ids=new Set(rows.map(r=>r.id));
+  repRows=repRows.filter(r=>!ids.has(r.id));
+  records=records.filter(r=>!ids.has(r.id));
+  save('records',records);dashDays=null;render();
+  toast(`ลบแล้ว ${n} รายการ`,'ok');
+}
 function reportEmp(){
   if(repRows===null&&!repLoading){setTimeout(repLoad,0);return repBar()+'<div class="card" style="padding:40px;text-align:center;color:var(--faint)">กำลังโหลดประวัติ...</div>'}
   if(repLoading)return repBar()+'<div class="card" style="padding:40px;text-align:center;color:var(--faint)">กำลังโหลดประวัติ...</div>';
   const rows=repRows;
-  return repBar()+`<div style="font-size:12.5px;color:var(--muted);margin-bottom:8px">พบ ${rows.length} รายการ${rows.length>=3000?' (แสดงสูงสุด 3,000 รายการ — ลองแคบช่วงวันที่ลง)':''}</div>
+  return repBar()+`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:10px;flex-wrap:wrap">
+    <span style="font-size:12.5px;color:var(--muted)">พบ ${rows.length} รายการ${rows.length>=3000?' (แสดงสูงสุด 3,000 รายการ — ลองแคบช่วงวันที่ลง)':''}</span>
+    ${myRole==='admin'&&rows.length?`<button class="btn-ghost" style="color:var(--red);padding:6px 12px;font-size:12.5px" onclick="delRangeRecords()">🗑️ ลบทั้งหมดที่แสดง (${rows.length})</button>`:''}
+  </div>
   <div class="card" style="overflow-x:auto"><table>
-    <tr><th>วันที่</th><th>รหัส</th><th>ชื่อ - นามสกุล</th><th>แผนก</th><th>เวลาออก</th><th>เวลากลับเข้า</th><th>สถานะ</th></tr>
+    <tr><th>วันที่</th><th>รหัส</th><th>ชื่อ - นามสกุล</th><th>แผนก</th><th>เวลาออก</th><th>เวลากลับเข้า</th><th>สถานะ</th>${myRole==='admin'?'<th>จัดการ</th>':''}</tr>
     ${rows.map(r=>`<tr><td>${esc(r.date)}</td><td style="color:var(--blue);font-weight:600">${esc(r.code)}</td><td style="font-weight:600">${esc(r.name)}</td>
       <td>${esc(r.dept)}</td><td>${r.out||'-'}</td><td>${r.in||'-'}</td>
-      <td>${!r.out?'<span class="badge b-yellow">เข้าโดยไม่ได้เช็คออก</span>':r.in?'<span class="badge b-green">กลับเข้าแล้ว</span>':'<span class="badge b-red">ยังไม่กลับเข้า</span>'}</td></tr>`).join('')||'<tr><td colspan="7" style="text-align:center;color:var(--faint);padding:30px">ยังไม่มีข้อมูล</td></tr>'}
+      <td>${!r.out?'<span class="badge b-yellow">เข้าโดยไม่ได้เช็คออก</span>':r.in?'<span class="badge b-green">กลับเข้าแล้ว</span>':'<span class="badge b-red">ยังไม่กลับเข้า</span>'}</td>
+      ${myRole==='admin'?`<td><button class="btn-ghost" style="padding:5px 10px;color:var(--red)" title="ลบรายการนี้" onclick="delRecord(${r.id??'null'})">🗑️</button></td>`:''}</tr>`).join('')||`<tr><td colspan="${myRole==='admin'?8:7}" style="text-align:center;color:var(--faint);padding:30px">ยังไม่มีข้อมูล</td></tr>`}
   </table></div>`;
 }
 function reportVis(){

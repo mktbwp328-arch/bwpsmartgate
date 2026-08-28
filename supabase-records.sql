@@ -22,8 +22,9 @@ alter table public.smartgate_records enable row level security;
 drop policy if exists "records read"   on public.smartgate_records;
 drop policy if exists "records insert" on public.smartgate_records;
 drop policy if exists "records update" on public.smartgate_records;
+drop policy if exists "records delete" on public.smartgate_records;
 
 create policy "records read"   on public.smartgate_records for select using (true);
 create policy "records insert" on public.smartgate_records for insert with check (true);
 create policy "records update" on public.smartgate_records for update using (true);
--- ไม่มี policy สำหรับ delete = ลบไม่ได้ ประวัติถูกเก็บถาวร
+create policy "records delete" on public.smartgate_records for delete using (true);

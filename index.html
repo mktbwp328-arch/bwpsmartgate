@@ -204,7 +204,15 @@ function getUser(code){
 }
 let records=load('records',[]);   // {type:'emp', code, name, dept, in, out, date}
 let visitors=load('visitors',[]);// {id,name,addr,company,phone,contactCode,contactName,dept,purpose,photo,timeIn,status,timeOut}
-let settings=load('settings',{company:'',address:'',lat:null,lng:null,radius:50,simulate:true,simInRange:true});
+/* หมุดบริษัทถาวร — แก้ได้ในหน้าตั้งค่า แต่ถ้าล้างข้อมูลจะกลับมาใช้ค่านี้เสมอ */
+const COMPANY_PIN={
+  company:'บริษัท เบสท์เวิลด์ อินเตอร์พลาส จำกัด',
+  address:'บริษัท เบสท์เวิลด์ อินเตอร์พลาส จำกัด จ.ฉะเชิงเทรา',
+  lat:13.625307, lng:100.938321,   // 13°37'31.1"N 100°56'18.0"E
+  radius:100, simulate:false, simInRange:true
+};
+let settings=load('settings',{...COMPANY_PIN});
+if(settings.lat==null){settings.lat=COMPANY_PIN.lat;settings.lng=COMPANY_PIN.lng} // เผื่อข้อมูลเก่าที่ยังไม่ได้ปักหมุด
 let session=load('session',null);
 const persist=()=>{save('employees',employees);save('records',records);save('visitors',visitors);save('settings',settings);save('session',session);
   sbPush('employees',employees);sbPush('records',records);sbPush('visitors',visitors);sbPush('settings',settings)};
@@ -938,6 +946,7 @@ function pageSettings(){
     <div class="field"><label>รัศมีที่อนุญาต (เมตร)</label><input id="s-radius" type="number" value="${settings.radius}"></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;align-items:center">
       <button class="btn-ghost" onclick="pinHere()">📌 ใช้ตำแหน่งปัจจุบันเป็นหมุดบริษัท</button>
+      <button class="btn-ghost" onclick="restoreCompanyPin()">↺ คืนค่าหมุดบริษัท</button>
       <button class="btn-blue" onclick="saveSettings()">บันทึกการตั้งค่า</button>
       ${settings.lat?`<a href="https://www.google.com/maps/search/?api=1&query=${settings.lat},${settings.lng}" target="_blank" rel="noopener" style="font-size:13px;font-weight:600">🗺️ ดูหมุดใน Google Maps</a>`:''}
     </div>
@@ -953,6 +962,11 @@ function pageSettings(){
       <button class="btn-ghost" style="color:var(--red)" onclick="if(confirm('ล้างข้อมูลทดลองทั้งหมด?')){localStorage.clear();location.reload()}">🗑️ ล้างข้อมูลทดลองทั้งหมด</button>
     </div>
   </div></div>`;
+}
+function restoreCompanyPin(){
+  $('s-company').value=COMPANY_PIN.company;$('s-address').value=COMPANY_PIN.address;
+  $('s-lat').value=COMPANY_PIN.lat;$('s-lng').value=COMPANY_PIN.lng;$('s-radius').value=COMPANY_PIN.radius;
+  saveSettings();toast('คืนค่าหมุดบริษัทเรียบร้อย','ok');
 }
 function pinHere(){
   if(!navigator.geolocation){toast('เบราว์เซอร์ไม่รองรับ GPS','err');return}

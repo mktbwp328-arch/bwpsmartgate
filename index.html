@@ -412,16 +412,13 @@ function render(){
   const pg=PAGES.find(p=>p.id===cur);$('page-title').textContent=pg.title;
   $('pages').innerHTML=({dash:pageDash,emp:pageEmp,scan:pageScan,myscan:pageMyscan,visitor:pageVisitor,approve:pageApprove,report:pageReport,settings:pageSettings})[cur]();
   if(cur==='emp')renderEmpTable();
-  if(cur==='dash'&&myRole!=='emp'&&dashDays===null&&!window._dashLoading){window._dashLoading=true;loadDashDays().then(()=>{window._dashLoading=false;if(cur==='dash')render()})}
+  if(cur==='dash'&&myRole!=='emp'&&dashRows===null&&!window._dashLoading){window._dashLoading=true;loadDash().then(()=>{window._dashLoading=false;if(cur==='dash')render()})}
   updateGpsUI();
 }
 
 /* ================= DASHBOARD ================= */
 function pageDash(){
   const d=today();
-  const ins=records.filter(r=>r.date===d&&r.in).length;
-  const outs=records.filter(r=>r.date===d&&r.out).length;
-  const outNow=new Set(records.filter(r=>r.date===d&&r.out&&!r.in).map(r=>r.code)).size;
   const vNow=visitors.filter(v=>v.status!=='ออกแล้ว').length;
   const pend=visitors.filter(v=>v.status==='รออนุมัติออก'&&(myRole!=='emp'||v.contactCode===session.code)).length;
   if(myRole==='emp'){
@@ -447,108 +444,164 @@ function pageDash(){
       </div></div>`;
   }
   /* ---------- แดชบอร์ดผู้ดูแล ---------- */
-  const todayRows=records.filter(r=>r.date===d);
+  if(dashRows===null)return dashBar()+'<div class="card" style="padding:50px;text-align:center;color:var(--faint)">กำลังโหลดข้อมูล...</div>';
+  const isToday=dashMode==='day'&&dashDay===dayKey();
+  const todayRows=dashRows;
   const outRows=todayRows.filter(r=>r.out&&!r.in).sort((a,b)=>(a.out||'').localeCompare(b.out||''));
+  // นับจากช่วงที่เลือก ไม่ใช่จากข้อมูลวันนี้อย่างเดียว
+  const outs=todayRows.filter(r=>r.out).length;
+  const ins=todayRows.filter(r=>r.in).length;
+  const outNow=new Set(outRows.map(r=>r.code)).size;
+  const periodVisitors=visitors.filter(v=>{const k=v.dayKey||(v.id>1e12?dayKey(new Date(v.id)):null);const [f,t]=dashRange();return !k||(k>=f&&k<=t)});
   const stat=(bg,icon,label,val,unit,onclick,active)=>`
     <div class="stat" onclick="${onclick}" style="background:${bg};cursor:pointer;position:relative;transition:transform .12s;outline:${active?'3px solid rgba(255,255,255,.55)':'none'}" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
       <div style="font-size:13px;opacity:.9">${icon} ${label}</div>
       <div style="font-size:30px;font-weight:700">${val} <span style="font-size:14px">${unit}</span></div>
       <div style="position:absolute;right:14px;bottom:12px;font-size:11px;opacity:.75">ดูรายละเอียด ›</div>
     </div>`;
-  // กราฟ 7 วัน
+  // กราฟตามช่วงที่เลือก
   const chart=(()=>{
-    if(!dashDays)return '<div style="color:var(--faint);font-size:13px;padding:26px 0;text-align:center">กำลังโหลดกราฟ...</div>';
-    const max=Math.max(1,...dashDays.map(x=>Math.max(x.outs,x.ins)));
-    return `<div style="display:flex;align-items:flex-end;gap:10px;height:150px;padding-top:6px">
-      ${dashDays.map(x=>`
-        <div onclick="dashPickDay('${x.key}')" title="${x.label} · ออก ${x.outs} · เข้า ${x.ins}" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;min-width:0">
-          <div style="display:flex;align-items:flex-end;gap:3px;height:110px">
-            <div style="width:14px;background:var(--blue);border-radius:3px 3px 0 0;height:${Math.round(x.outs/max*106)||2}px" ></div>
-            <div style="width:14px;background:var(--green);border-radius:3px 3px 0 0;height:${Math.round(x.ins/max*106)||2}px"></div>
+    if(!dashChart||!dashChart.length)return '<div style="color:var(--faint);font-size:13px;padding:26px 0;text-align:center">ไม่มีข้อมูลในช่วงที่เลือก</div>';
+    const max=Math.max(1,...dashChart.map(x=>Math.max(x.outs,x.ins)));
+    const many=dashChart.length>12, bw=many?6:14;
+    return `<div style="display:flex;align-items:flex-end;gap:${many?4:10}px;height:150px;padding-top:6px;overflow-x:auto">
+      ${dashChart.map((x,i)=>`
+        <div onclick="${x.click||''}" title="${x.label} · ออก ${x.outs} · เข้า ${x.ins}" style="flex:1;display:flex;flex-direction:column;align-items:center;gap:5px;${x.click?'cursor:pointer;':''}min-width:${many?14:0}px">
+          <div style="display:flex;align-items:flex-end;gap:${many?2:3}px;height:110px">
+            <div style="width:${bw}px;background:var(--blue);border-radius:3px 3px 0 0;height:${Math.round(x.outs/max*106)||2}px"></div>
+            <div style="width:${bw}px;background:var(--green);border-radius:3px 3px 0 0;height:${Math.round(x.ins/max*106)||2}px"></div>
           </div>
-          <div style="font-size:10.5px;color:var(--muted);white-space:nowrap">${x.short}</div>
+          <div style="font-size:10.5px;color:var(--muted);white-space:nowrap">${(many&&i%3!==0)?'':x.short}</div>
         </div>`).join('')}
     </div>
-    <div style="display:flex;gap:16px;justify-content:center;font-size:12px;color:var(--muted);margin-top:8px">
+    <div style="display:flex;gap:16px;justify-content:center;font-size:12px;color:var(--muted);margin-top:8px;flex-wrap:wrap">
       <span><span style="display:inline-block;width:10px;height:10px;background:var(--blue);border-radius:2px"></span> เช็คออก</span>
       <span><span style="display:inline-block;width:10px;height:10px;background:var(--green);border-radius:2px"></span> เช็คเข้า</span>
-      <span style="color:var(--faint)">แตะแท่งเพื่อดูรายงานวันนั้น</span>
+      ${dashChart[0]?.click?'<span style="color:var(--faint)">แตะแท่งเพื่อเจาะดูข้อมูล</span>':''}
     </div>`;
   })();
   // สรุปตามแผนก (วันนี้)
   const byDept={};todayRows.forEach(r=>{const k=r.dept||'ไม่ระบุ';byDept[k]=byDept[k]||{out:0,pending:0};byDept[k].out++;if(r.out&&!r.in)byDept[k].pending++});
   const deptList=Object.entries(byDept).sort((a,b)=>b[1].out-a[1].out).slice(0,6);
   const deptMax=Math.max(1,...deptList.map(x=>x[1].out));
+  const per=dashMode==='day'?'วันนี้':dashMode==='month'?'เดือนนี้':'ปีนี้';
+  const perLabel=dashMode==='day'?(isToday?'วันนี้':'วันที่เลือก'):dashMode==='month'?'ในเดือนนี้':'ในปีนี้';
   return `<div class="page">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-      <div style="font-size:13.5px;color:var(--muted)">📅 ${esc(fullDate())}</div>
-      <button class="btn-ghost" onclick="dashReload()" style="padding:7px 14px;font-size:12.5px">↻ รีเฟรชข้อมูล</button>
-    </div>
+    ${dashBar()}
     <div class="grid4">
-      ${stat('var(--orange)','🚶','ออกไปข้างนอกตอนนี้',outNow,'คน',"dashFocus('out')",dashFocusKey==='out')}
-      ${stat('var(--blue)','⬅️','เช็คออกวันนี้',outs,'ครั้ง',"dashFocus('all')",dashFocusKey==='all')}
-      ${stat('var(--green)','➡️','เช็คเข้าวันนี้',ins,'ครั้ง',"go('report')")}
-      ${stat('var(--purple)','🪪','ผู้มาติดต่อในบริษัท',vNow,'คน',"go('approve')")}
+      ${isToday
+        ? stat('var(--orange)','🚶','ออกไปข้างนอกตอนนี้',outNow,'คน',"dashFocus('out')",dashFocusKey==='out')
+        : stat('var(--orange)','⚠️','ออกแล้วไม่กลับ',outRows.length,'ครั้ง',"dashFocus('out')",dashFocusKey==='out')}
+      ${stat('var(--blue)','⬅️','เช็คออก '+perLabel,outs,'ครั้ง',"dashToReport()")}
+      ${stat('var(--green)','➡️','เช็คเข้า '+perLabel,ins,'ครั้ง',"dashToReport()")}
+      ${stat('var(--purple)','🪪','ผู้มาติดต่อ '+perLabel,periodVisitors.length,'คน',"go('approve')")}
     </div>
     ${pend?`<div class="card" style="margin-top:16px;padding:14px 18px;border:1.5px solid #FDE047;display:flex;align-items:center;gap:12px;cursor:pointer" onclick="go('approve')"><span style="font-size:22px">🔔</span><div style="flex-grow:1"><b>ผู้มาติดต่อ ${pend} รายรออนุมัติออก</b><div style="font-size:12.5px;color:var(--muted)">แตะเพื่อไปหน้าอนุมัติ</div></div>›</div>`:''}
 
     <div class="grid2" style="margin-top:16px">
       <div class="card" style="padding:18px 20px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-          <div style="font-weight:700">🚶 ออกไปข้างนอกตอนนี้</div>
-          <span class="badge ${outNow?'b-yellow':'b-green'}">${outNow} คน</span>
+          <div style="font-weight:700">${isToday?'🚶 ออกไปข้างนอกตอนนี้':'⚠️ ออกแล้วไม่กลับ (ในช่วงที่เลือก)'}</div>
+          <span class="badge ${outRows.length?'b-yellow':'b-green'}">${isToday?outNow+' คน':outRows.length+' ครั้ง'}</span>
         </div>
-        ${outRows.map(r=>{const m=minsSince(r.out);const late=m>=120;
+        ${outRows.slice(0,12).map(r=>{const m=isToday?minsSince(r.out):-1;const late=m>=120;
           return `<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line2)">
             <div style="width:34px;height:34px;border-radius:50%;background:${late?'#FEE2E2':'#FFF7ED'};color:${late?'#B91C1C':'#9A3412'};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0">${esc(r.name.replace(/^(นาย|น\.ส\.|นาง|นางสาว)/,'').slice(0,2))}</div>
-            <div style="flex-grow:1;min-width:0"><div style="font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.name)}</div><div style="font-size:11.5px;color:var(--muted)">${esc(r.dept||'-')} · ออก ${r.out} น.</div></div>
-            <span class="badge ${late?'b-red':'b-yellow'}" style="flex-shrink:0">${fmtDur(m)}</span>
-          </div>`}).join('')||'<div style="color:var(--faint);font-size:13.5px;padding:22px 0;text-align:center">ทุกคนอยู่ในบริษัท ✓</div>'}
-        ${outRows.some(r=>minsSince(r.out)>=120)?'<div style="font-size:12px;color:#B91C1C;margin-top:10px">⚠ แถบแดง = ออกไปเกิน 2 ชั่วโมงแล้ว</div>':''}
+            <div style="flex-grow:1;min-width:0"><div style="font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.name)}</div><div style="font-size:11.5px;color:var(--muted)">${esc(r.dept||'-')} · ${isToday?'':esc(r.date)+' · '}ออก ${r.out} น.</div></div>
+            ${isToday?`<span class="badge ${late?'b-red':'b-yellow'}" style="flex-shrink:0">${fmtDur(m)}</span>`:'<span class="badge b-yellow" style="flex-shrink:0">ไม่กลับ</span>'}
+          </div>`}).join('')||`<div style="color:var(--faint);font-size:13.5px;padding:22px 0;text-align:center">${isToday?'ทุกคนอยู่ในบริษัท ✓':'ไม่มีรายการค้าง ✓'}</div>`}
+        ${outRows.length>12?`<div style="font-size:12px;color:var(--muted);margin-top:10px">แสดง 12 จาก ${outRows.length} รายการ</div>`:''}
+        ${isToday&&outRows.some(r=>minsSince(r.out)>=120)?'<div style="font-size:12px;color:#B91C1C;margin-top:10px">⚠ แถบแดง = ออกไปเกิน 2 ชั่วโมงแล้ว</div>':''}
       </div>
 
       <div class="card" style="padding:18px 20px">
-        <div style="font-weight:700;margin-bottom:6px">📊 ย้อนหลัง 7 วัน</div>
+        <div style="font-weight:700;margin-bottom:6px">📊 ${dashMode==='day'?'ย้อนหลัง 7 วัน':dashMode==='month'?'รายวันในเดือนนี้':'รายเดือนในปีนี้'}</div>
         ${chart}
       </div>
     </div>
 
     <div class="grid2" style="margin-top:16px">
       <div class="card" style="padding:18px 20px">
-        <div style="font-weight:700;margin-bottom:12px">🏢 แยกตามแผนก (วันนี้)</div>
+        <div style="font-weight:700;margin-bottom:12px">🏢 แยกตามแผนก (${per})</div>
         ${deptList.map(([k,v])=>`
           <div style="margin-bottom:11px">
             <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px"><span>${esc(k)}</span><span style="color:var(--muted)">${v.out} ครั้ง${v.pending?` · ยังไม่กลับ ${v.pending}`:''}</span></div>
             <div style="height:8px;background:var(--line2);border-radius:99px;overflow:hidden"><div style="height:100%;width:${Math.round(v.out/deptMax*100)}%;background:${v.pending?'var(--orange)':'var(--blue)'};border-radius:99px"></div></div>
-          </div>`).join('')||'<div style="color:var(--faint);font-size:13.5px;padding:18px 0;text-align:center">ยังไม่มีข้อมูลวันนี้</div>'}
+          </div>`).join('')||'<div style="color:var(--faint);font-size:13.5px;padding:18px 0;text-align:center">ยังไม่มีข้อมูลในช่วงที่เลือก</div>'}
       </div>
 
       <div class="card" style="padding:18px 20px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-          <div style="font-weight:700">🕒 รายการล่าสุดวันนี้</div>
-          <span style="font-size:12px;color:var(--blue);cursor:pointer;font-weight:600" onclick="go('report')">ดูทั้งหมด ›</span>
+          <div style="font-weight:700">🕒 รายการล่าสุด (${per})</div>
+          <span style="font-size:12px;color:var(--blue);cursor:pointer;font-weight:600" onclick="dashToReport()">ดูทั้งหมด ›</span>
         </div>
-        ${todayRows.slice(-7).reverse().map(r=>`<div style="display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-bottom:1px solid var(--line2);font-size:13.5px"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.name)}</b> <span style="color:var(--muted)">· ${esc(r.dept||'-')}</span></span><span style="flex-shrink:0">${r.out?'ออก '+r.out:'ออก -'} ${r.in?'· เข้า '+r.in:'<span style="color:var(--orange);font-weight:600">· ยังไม่กลับ</span>'}</span></div>`).join('')||'<div style="color:var(--faint);font-size:13.5px;padding:22px 0;text-align:center">ยังไม่มีรายการวันนี้</div>'}
+        ${todayRows.slice(-7).reverse().map(r=>`<div style="display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-bottom:1px solid var(--line2);font-size:13.5px"><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"><b>${esc(r.name)}</b> <span style="color:var(--muted)">· ${esc(r.dept||'-')}</span></span><span style="flex-shrink:0">${dashMode!=='day'?'<span style="color:var(--faint)">'+esc(r.date)+'</span> ':''}${r.out?'ออก '+r.out:'ออก -'} ${r.in?'· เข้า '+r.in:'<span style="color:var(--orange);font-weight:600">· ยังไม่กลับ</span>'}</span></div>`).join('')||'<div style="color:var(--faint);font-size:13.5px;padding:22px 0;text-align:center">ยังไม่มีรายการในช่วงที่เลือก</div>'}
       </div>
     </div></div>`;
 }
-/* ---- ตัวช่วยของแดชบอร์ด ---- */
-let dashDays=null,dashFocusKey=null;
+/* ---- ตัวช่วยของแดชบอร์ด (กรอง วัน / เดือน / ปี) ---- */
+const nowD=new Date();
+let dashMode=load('dashMode','day'),
+    dashDay=load('dashDay',dayKey()),
+    dashMonth=load('dashMonth',dayKey().slice(0,7)),
+    dashYear=load('dashYear',String(nowD.getFullYear())),
+    dashRows=null,dashChart=null,dashFocusKey=null;
+function dashSave(){save('dashMode',dashMode);save('dashDay',dashDay);save('dashMonth',dashMonth);save('dashYear',dashYear)}
+function dashRange(){
+  if(dashMode==='day')return [dashDay,dashDay];
+  if(dashMode==='month'){const [y,m]=dashMonth.split('-').map(Number);const last=new Date(y,m,0).getDate();return [`${dashMonth}-01`,`${dashMonth}-${String(last).padStart(2,'0')}`]}
+  return [`${dashYear}-01-01`,`${dashYear}-12-31`];
+}
+function dashBar(){
+  const btn=(m,t)=>`<button onclick="dashSetMode('${m}')" style="padding:9px 18px;border-radius:9px;font-size:13.5px;font-weight:${dashMode===m?700:500};background:${dashMode===m?'var(--blue)':'transparent'};color:${dashMode===m?'#fff':'var(--muted)'}">${t}</button>`;
+  const picker=dashMode==='day'
+    ? `<input type="date" id="dash-day" value="${dashDay}" style="width:auto" onchange="dashDay=this.value;dashApply()">`
+    : dashMode==='month'
+    ? `<input type="month" id="dash-month" value="${dashMonth}" style="width:auto" onchange="dashMonth=this.value;dashApply()">`
+    : `<select id="dash-year" style="width:auto" onchange="dashYear=this.value;dashApply()">${Array.from({length:6},(_,i)=>nowD.getFullYear()-i).map(y=>`<option value="${y}" ${String(y)===dashYear?'selected':''}>ปี ${y+543} (${y})</option>`).join('')}</select>`;
+  return `<div class="card" style="padding:10px 12px;margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+    <div style="display:flex;gap:4px;background:var(--line2);border-radius:11px;padding:3px">${btn('day','รายวัน')}${btn('month','รายเดือน')}${btn('year','รายปี')}</div>
+    ${picker}
+    ${dashMode==='day'?`<button class="btn-ghost" style="padding:8px 14px;font-size:12.5px" onclick="dashDay=dayKey();dashApply()">วันนี้</button>`:''}
+    <div style="flex-grow:1"></div>
+    <span style="font-size:12.5px;color:var(--muted)">${dashMode==='day'?'📅 '+(dashDay===dayKey()?esc(fullDate()):esc(new Date(dashDay+'T00:00').toLocaleDateString('th-TH',{weekday:'long',day:'numeric',month:'long',year:'numeric'}))):dashMode==='month'?'📅 '+esc(new Date(dashMonth+'-01T00:00').toLocaleDateString('th-TH',{month:'long',year:'numeric'})):'📅 ปี '+(Number(dashYear)+543)}</span>
+    <button class="btn-ghost" onclick="dashReload()" style="padding:8px 14px;font-size:12.5px">↻ รีเฟรช</button>
+  </div>`;
+}
+function dashSetMode(m){dashMode=m;dashSave();dashApply()}
+function dashApply(){dashSave();dashRows=null;dashChart=null;render()}
+function dashToReport(){const [f,t]=dashRange();repFrom=f;repTo=t;repQ='';repRows=null;reportTab='emp';save('reportTab','emp');repSave();go('report')}
 function minsSince(hhmm){if(!hhmm)return 0;const [h,m]=hhmm.split(':').map(Number);const n=new Date();return (n.getHours()*60+n.getMinutes())-(h*60+m)}
 function fmtDur(m){if(m<0)m=0;const h=Math.floor(m/60),x=m%60;return h?`${h} ชม. ${x} น.`:`${x} นาที`}
 function dashFocus(k){dashFocusKey=k;render();const el=document.querySelector('#pages .grid2');if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}
-function dashPickDay(k){repFrom=k;repTo=k;repRows=null;reportTab='emp';save('reportTab','emp');repSave();go('report')}
-async function dashReload(){dashDays=null;render();await sbLoad();await loadDashDays();render();toast('อัปเดตข้อมูลแล้ว','ok')}
-async function loadDashDays(){
-  const days=[];const now=new Date();
-  for(let i=6;i>=0;i--){const dt=new Date(now);dt.setDate(dt.getDate()-i);
-    days.push({key:dayKey(dt),label:dt.toLocaleDateString('th-TH',{day:'numeric',month:'short'}),short:dt.toLocaleDateString('th-TH',{day:'numeric',month:'short'}),outs:0,ins:0})}
-  const rows=await recQuery(days[0].key,days[6].key,'');
-  const src=rows||records;
-  src.forEach(r=>{const day=days.find(x=>x.key===r.dayKey);if(day){if(r.out)day.outs++;if(r.in)day.ins++}});
-  dashDays=days;
+function dashPickDay(k){dashMode='day';dashDay=k;dashApply()}
+function dashPickMonth(k){dashMode='month';dashMonth=k;dashApply()}
+async function dashReload(){dashRows=null;dashChart=null;render();await sbLoad();await loadDash();render();toast('อัปเดตข้อมูลแล้ว','ok')}
+async function loadDash(){
+  const [f,t]=dashRange();
+  dashRows=await recQuery(f,t,'')||records.filter(r=>!r.dayKey||(r.dayKey>=f&&r.dayKey<=t));
+  // ---- ชุดข้อมูลกราฟ ----
+  if(dashMode==='year'){
+    const ms=Array.from({length:12},(_,i)=>{const key=`${dashYear}-${String(i+1).padStart(2,'0')}`;
+      return {key,label:new Date(dashYear+'-'+String(i+1).padStart(2,'0')+'-01T00:00').toLocaleDateString('th-TH',{month:'long'}),short:new Date(dashYear+'-'+String(i+1).padStart(2,'0')+'-01T00:00').toLocaleDateString('th-TH',{month:'short'}),outs:0,ins:0,click:`dashPickMonth('${key}')`}});
+    dashRows.forEach(r=>{const m=ms.find(x=>r.dayKey&&r.dayKey.startsWith(x.key));if(m){if(r.out)m.outs++;if(r.in)m.ins++}});
+    dashChart=ms;
+  }else if(dashMode==='month'){
+    const [y,mo]=dashMonth.split('-').map(Number);const last=new Date(y,mo,0).getDate();
+    const ds=Array.from({length:last},(_,i)=>{const key=`${dashMonth}-${String(i+1).padStart(2,'0')}`;
+      return {key,label:key,short:String(i+1),outs:0,ins:0,click:`dashPickDay('${key}')`}});
+    dashRows.forEach(r=>{const dd=ds.find(x=>x.key===r.dayKey);if(dd){if(r.out)dd.outs++;if(r.in)dd.ins++}});
+    dashChart=ds;
+  }else{
+    const base=new Date(dashDay+'T00:00');const days=[];
+    for(let i=6;i>=0;i--){const dt=new Date(base);dt.setDate(dt.getDate()-i);
+      days.push({key:dayKey(dt),label:dt.toLocaleDateString('th-TH',{day:'numeric',month:'short'}),short:dt.toLocaleDateString('th-TH',{day:'numeric',month:'short'}),outs:0,ins:0,click:`dashPickDay('${dayKey(dt)}')`})}
+    const wk=await recQuery(days[0].key,days[6].key,'')||records;
+    wk.forEach(r=>{const dd=days.find(x=>x.key===r.dayKey);if(dd){if(r.out)dd.outs++;if(r.in)dd.ins++}});
+    dashChart=days;
+  }
 }
-setInterval(()=>{if(cur==='dash'&&!$('app').classList.contains('hidden'))render()},60000); // อัปเดตเวลาที่ออกไปทุกนาที
+setInterval(()=>{if(cur==='dash'&&dashMode==='day'&&dashDay===dayKey()&&!$('app').classList.contains('hidden'))render()},60000);
 
 /* ================= EMPLOYEES ================= */
 function pageEmp(){
@@ -1044,7 +1097,7 @@ async function delRecord(id){
   if(!await recDelete(id))return;
   if(repRows)repRows=repRows.filter(x=>x.id!==id);
   records=records.filter(x=>x.id!==id);
-  save('records',records);dashDays=null;render();
+  save('records',records);dashRows=null;dashChart=null;render();
   toast('ลบรายการแล้ว','ok');
 }
 async function delRangeRecords(){
@@ -1056,7 +1109,7 @@ async function delRangeRecords(){
   const ids=new Set(rows.map(r=>r.id));
   repRows=repRows.filter(r=>!ids.has(r.id));
   records=records.filter(r=>!ids.has(r.id));
-  save('records',records);dashDays=null;render();
+  save('records',records);dashRows=null;dashChart=null;render();
   toast(`ลบแล้ว ${n} รายการ`,'ok');
 }
 function reportEmp(){

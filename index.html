@@ -537,7 +537,7 @@ let dashDays=null,dashFocusKey=null;
 function minsSince(hhmm){if(!hhmm)return 0;const [h,m]=hhmm.split(':').map(Number);const n=new Date();return (n.getHours()*60+n.getMinutes())-(h*60+m)}
 function fmtDur(m){if(m<0)m=0;const h=Math.floor(m/60),x=m%60;return h?`${h} ชม. ${x} น.`:`${x} นาที`}
 function dashFocus(k){dashFocusKey=k;render();const el=document.querySelector('#pages .grid2');if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}
-function dashPickDay(k){repFrom=k;repTo=k;repRows=null;go('report')}
+function dashPickDay(k){repFrom=k;repTo=k;repRows=null;reportTab='emp';save('reportTab','emp');repSave();go('report')}
 async function dashReload(){dashDays=null;render();await sbLoad();await loadDashDays();render();toast('อัปเดตข้อมูลแล้ว','ok')}
 async function loadDashDays(){
   const days=[];const now=new Date();
@@ -996,8 +996,8 @@ function approveOut(id){
 }
 
 /* ================= REPORT ================= */
-let reportTab='emp';
-function setReportTab(t){reportTab=t;render()}
+let reportTab=load('reportTab','emp');
+function setReportTab(t){reportTab=t;save('reportTab',t);render()}   // จำแท็บไว้ตอนรีเฟรช
 function rTabBtn(id,label){return `<button onclick="setReportTab('${id}')" style="flex-grow:1;padding:11px 16px;border-radius:9px;font-size:13.5px;font-weight:${reportTab===id?700:500};background:${reportTab===id?'var(--blue)':'transparent'};color:${reportTab===id?'#fff':'var(--muted)'}">${label}</button>`}
 function pageReport(){
   return `<div class="page">
@@ -1008,11 +1008,13 @@ function pageReport(){
   </div>`;
 }
 /* ---- ตัวกรองช่วงวันที่ของหน้ารายงาน ---- */
-let repFrom=null,repTo=null,repQ='',repRows=null,repLoading=false;
+let repFrom=load('repFrom',null),repTo=load('repTo',null),repQ=load('repQ',''),repRows=null,repLoading=false;
 function repDefaults(){if(!repTo){const n=new Date();repTo=dayKey(n);const s=new Date(n);s.setDate(s.getDate()-30);repFrom=dayKey(s)}}
+function repSave(){save('repFrom',repFrom);save('repTo',repTo);save('repQ',repQ)}   // จำตัวกรองไว้ตอนรีเฟรช
 async function repLoad(){
   repDefaults();
   repFrom=$('rep-from')?.value||repFrom;repTo=$('rep-to')?.value||repTo;repQ=$('rep-q')?.value.trim()||'';
+  repSave();
   repLoading=true;render();
   const rows=await recQuery(repFrom,repTo,repQ);
   repRows=rows||records.filter(r=>{const q=repQ.toLowerCase();return !q||[r.code,r.name,r.dept].join(' ').toLowerCase().includes(q)});
@@ -1033,7 +1035,7 @@ function repBar(kind){
 }
 function repApplyVis(){
   repFrom=$('rep-from').value||repFrom;repTo=$('rep-to').value||repTo;repQ=$('rep-q').value.trim();
-  render();
+  repSave();render();
 }
 async function delRecord(id){
   if(id==null){toast('รายการนี้ยังไม่ถูกบันทึกลงฐานข้อมูล','err');return}

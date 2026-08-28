@@ -156,6 +156,33 @@ async function sbFetch(path,opts={}){
   if(!res.ok)throw new Error('sb '+res.status+' '+await res.text());
   const t=await res.text();return t?JSON.parse(t):null;
 }
+/* ---- ประวัติเข้า-ออก: เก็บเป็นตารางจริง (ถาวร ไม่ทับกัน) ---- */
+let recTable=false;                                   // true = ใช้ตาราง smartgate_records ได้
+const dayKey=(dt)=>{const d=dt||new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
+function toRow(r){return {emp_code:r.code,emp_name:r.name,dept:r.dept,work_date:r.date,day_key:r.dayKey||dayKey(),out_time:r.out||null,in_time:r.in||null}}
+function fromRow(x){return {type:'emp',id:x.id,code:x.emp_code,name:x.emp_name,dept:x.dept,date:x.work_date,dayKey:x.day_key,out:x.out_time,in:x.in_time}}
+async function recInsert(r){
+  if(!recTable)return;
+  try{
+    const res=await sbFetch('smartgate_records',{method:'POST',headers:{'Prefer':'return=representation'},body:JSON.stringify([toRow(r)])});
+    if(res&&res[0])r.id=res[0].id;
+  }catch(e){console.warn('บันทึกประวัติไม่สำเร็จ',e);toast('บันทึกประวัติขึ้นระบบไม่สำเร็จ','err')}
+}
+async function recUpdate(r){
+  if(!recTable||!r.id)return;
+  try{await sbFetch('smartgate_records?id=eq.'+r.id,{method:'PATCH',body:JSON.stringify({out_time:r.out||null,in_time:r.in||null,updated_at:new Date().toISOString()})});}
+  catch(e){console.warn('อัปเดตประวัติไม่สำเร็จ',e);toast('อัปเดตประวัติขึ้นระบบไม่สำเร็จ','err')}
+}
+async function recLoadDay(k){   // โหลดรายการของวันหนึ่งมาไว้ใช้งาน (สถานะเข้า-ออกวันนี้)
+  if(!recTable)return null;
+  try{return (await sbFetch(`smartgate_records?day_key=eq.${k}&order=id.asc`)).map(fromRow)}catch(e){return null}
+}
+async function recQuery(from,to,q){  // สำหรับหน้ารายงาน
+  if(!recTable)return null;
+  let url=`smartgate_records?day_key=gte.${from}&day_key=lte.${to}&order=day_key.desc,id.desc&limit=3000`;
+  if(q)url+=`&or=(emp_name.ilike.*${encodeURIComponent(q)}*,emp_code.ilike.*${encodeURIComponent(q)}*,dept.ilike.*${encodeURIComponent(q)}*)`;
+  try{return (await sbFetch(url)).map(fromRow)}catch(e){console.warn(e);return null}
+}
 let sbPending=0;
 function sbPush(key,data){
   if(!sbOnline)return;
@@ -177,7 +204,19 @@ async function sbLoad(){
     window._lastSync=j;
     // มีข้อมูลบนคลาวด์ → ใช้ของคลาวด์ / ยังไม่มี → อัปโหลดข้อมูลเครื่องนี้ขึ้นไปตั้งต้น
     if(m.employees)employees=m.employees;else sbPush('employees',employees);
-    if(m.records)records=m.records;else sbPush('records',records);
+    // ประวัติ: ใช้ตารางถ้ามี / ไม่มีก็ใช้ก้อน JSON แบบเดิม
+    try{await sbFetch('smartgate_records?limit=1');recTable=true}catch(e){recTable=false}
+    if(recTable){
+      const rows=await recLoadDay(dayKey());
+      if(rows){
+        if(!m.records_migrated&&Array.isArray(m.records)&&m.records.length){ // ย้ายข้อมูลเดิมขึ้นตารางครั้งเดียว
+          for(const r of m.records)await sbFetch('smartgate_records',{method:'POST',body:JSON.stringify([toRow(r)])}).catch(()=>{});
+          sbPush('records_migrated',true);sbPush('records',[]);
+          console.log('ย้ายประวัติเดิม '+m.records.length+' รายการขึ้นตารางแล้ว');
+        }
+        records=rows;
+      }
+    }else if(m.records)records=m.records;else sbPush('records',records);
     if(m.visitors)visitors=m.visitors;else sbPush('visitors',visitors);
     if(m.settings)settings={...settings,...m.settings};else sbPush('settings',settings);
     save('employees',employees);save('records',records);save('visitors',visitors);save('settings',settings);
@@ -215,7 +254,8 @@ let settings=load('settings',{...COMPANY_PIN});
 if(settings.lat==null){settings.lat=COMPANY_PIN.lat;settings.lng=COMPANY_PIN.lng} // เผื่อข้อมูลเก่าที่ยังไม่ได้ปักหมุด
 let session=load('session',null);
 const persist=()=>{save('employees',employees);save('records',records);save('visitors',visitors);save('settings',settings);save('session',session);
-  sbPush('employees',employees);sbPush('records',records);sbPush('visitors',visitors);sbPush('settings',settings)};
+  sbPush('employees',employees);sbPush('visitors',visitors);sbPush('settings',settings);
+  if(!recTable)sbPush('records',records)};   // มีตารางแล้วไม่ต้องดันก้อน JSON ทับ
 
 /* ================= UTIL ================= */
 const $=id=>document.getElementById(id);
@@ -517,10 +557,10 @@ function doScan(){
   let rec=openOuting(emp.code,d);
   if(scanMode==='out'){
     if(rec){fail('เช็คออกไปแล้ว',`${esc(emp.name)} ออกเมื่อ ${rec.out} และยังไม่ได้เช็คเข้า — หากกลับเข้ามาแล้วให้เลือกแท็บ "เข้า"`);return}
-    rec={type:'emp',code:emp.code,name:emp.name,dept:emp.dept,out:nowTime(),in:null,date:d};records.push(rec);
+    rec={type:'emp',code:emp.code,name:emp.name,dept:emp.dept,out:nowTime(),in:null,date:d,dayKey:dayKey()};records.push(rec);recInsert(rec);
   }else{
-    if(rec)rec.in=nowTime();
-    else{rec={type:'emp',code:emp.code,name:emp.name,dept:emp.dept,out:null,in:nowTime(),date:d};records.push(rec)}
+    if(rec){rec.in=nowTime();recUpdate(rec)}
+    else{rec={type:'emp',code:emp.code,name:emp.name,dept:emp.dept,out:null,in:nowTime(),date:d,dayKey:dayKey()};records.push(rec);recInsert(rec)}
   }
   persist();
   box.innerHTML=`<div style="text-align:center;padding:14px 6px">
@@ -625,12 +665,14 @@ function doMyScan(){
   if(!gps.ok){myscanErr('อยู่นอกพื้นที่ที่กำหนด',`ต้องห่างหมุดบริษัทไม่เกิน ${settings.radius} ม. (ตอนนี้ ${gps.dist??'?'} ม.)`);toast('ปฏิเสธการบันทึก — นอกรัศมี','err');return}
   const t=nowTime();let note='';
   if(myMode==='out'){ // เริ่มรอบใหม่: ออกไปข้างนอก
-    records.push({type:'emp',code:me.code,name:me.name,dept:me.dept,out:t,in:null,date:d});
+    const r={type:'emp',code:me.code,name:me.name,dept:me.dept,out:t,in:null,date:d,dayKey:dayKey()};
+    records.push(r);recInsert(r);
     toast('เช็คออกสำเร็จ '+t+' น.','ok');
   }else{ // กลับเข้ามา: ปิดรอบที่ค้างอยู่
-    if(open){open.in=t;toast('เช็คเข้าสำเร็จ '+t+' น. — ยินดีต้อนรับกลับ','ok')}
+    if(open){open.in=t;recUpdate(open);toast('เช็คเข้าสำเร็จ '+t+' น. — ยินดีต้อนรับกลับ','ok')}
     else{
-      records.push({type:'emp',code:me.code,name:me.name,dept:me.dept,out:null,in:t,date:d});
+      const r={type:'emp',code:me.code,name:me.name,dept:me.dept,out:null,in:t,date:d,dayKey:dayKey()};
+      records.push(r);recInsert(r);
       note='<br><span style="font-size:12.5px;color:#A16207">หมายเหตุ: ไม่พบรายการเช็คออก — บันทึกเป็น "เข้าโดยไม่ได้เช็คออก"</span>';
       toast('เช็คเข้าสำเร็จ '+t+' น. (ไม่พบรายการเช็คออก)','ok');
     }
@@ -859,10 +901,35 @@ function pageReport(){
     ${({emp:reportEmp,vis:reportVis,daily:reportDaily,export:reportExport})[reportTab]()}
   </div>`;
 }
+/* ---- ตัวกรองช่วงวันที่ของหน้ารายงาน ---- */
+let repFrom=null,repTo=null,repQ='',repRows=null,repLoading=false;
+function repDefaults(){if(!repTo){const n=new Date();repTo=dayKey(n);const s=new Date(n);s.setDate(s.getDate()-30);repFrom=dayKey(s)}}
+async function repLoad(){
+  repDefaults();
+  repFrom=$('rep-from')?.value||repFrom;repTo=$('rep-to')?.value||repTo;repQ=$('rep-q')?.value.trim()||'';
+  repLoading=true;render();
+  const rows=await recQuery(repFrom,repTo,repQ);
+  repRows=rows||records.filter(r=>{const q=repQ.toLowerCase();return !q||[r.code,r.name,r.dept].join(' ').toLowerCase().includes(q)});
+  repLoading=false;render();
+}
+function repBar(){
+  repDefaults();
+  return `<div class="card" style="padding:12px 14px;margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+    <span style="font-size:13px;font-weight:600;color:#334155">วันที่</span>
+    <input type="date" id="rep-from" value="${repFrom}" style="width:auto">
+    <span style="color:var(--muted)">-</span>
+    <input type="date" id="rep-to" value="${repTo}" style="width:auto">
+    <input id="rep-q" value="${esc(repQ)}" placeholder="🔍 ค้นหาชื่อ / รหัส / แผนก" style="flex-grow:1;min-width:180px" onkeydown="if(event.key==='Enter')repLoad()">
+    <button class="btn-blue" onclick="repLoad()">ค้นหา</button>
+    ${recTable?'':'<span style="font-size:12px;color:#A16207">⚠ ยังไม่ได้สร้างตารางประวัติ — แสดงเฉพาะข้อมูลในระบบเดิม</span>'}
+  </div>`;
+}
 function reportEmp(){
-  const rows=records.slice().reverse();
-  window._empRows=rows;
-  return `<div class="card" style="overflow-x:auto"><table>
+  if(repRows===null&&!repLoading){setTimeout(repLoad,0);return repBar()+'<div class="card" style="padding:40px;text-align:center;color:var(--faint)">กำลังโหลดประวัติ...</div>'}
+  if(repLoading)return repBar()+'<div class="card" style="padding:40px;text-align:center;color:var(--faint)">กำลังโหลดประวัติ...</div>';
+  const rows=repRows;
+  return repBar()+`<div style="font-size:12.5px;color:var(--muted);margin-bottom:8px">พบ ${rows.length} รายการ${rows.length>=3000?' (แสดงสูงสุด 3,000 รายการ — ลองแคบช่วงวันที่ลง)':''}</div>
+  <div class="card" style="overflow-x:auto"><table>
     <tr><th>วันที่</th><th>รหัส</th><th>ชื่อ - นามสกุล</th><th>แผนก</th><th>เวลาออก</th><th>เวลากลับเข้า</th><th>สถานะ</th></tr>
     ${rows.map(r=>`<tr><td>${esc(r.date)}</td><td style="color:var(--blue);font-weight:600">${esc(r.code)}</td><td style="font-weight:600">${esc(r.name)}</td>
       <td>${esc(r.dept)}</td><td>${r.out||'-'}</td><td>${r.in||'-'}</td>
@@ -880,14 +947,16 @@ function reportVis(){
   </table></div>`;
 }
 function reportDaily(){
+  if(repRows===null&&!repLoading){setTimeout(repLoad,0);return repBar()+'<div class="card" style="padding:40px;text-align:center;color:var(--faint)">กำลังโหลด...</div>'}
+  if(repLoading)return repBar()+'<div class="card" style="padding:40px;text-align:center;color:var(--faint)">กำลังโหลด...</div>';
   const days={};
-  records.forEach(r=>{const d=days[r.date]=days[r.date]||{ins:0,outs:0,notBack:0,noOut:0,vis:0};
+  repRows.forEach(r=>{const d=days[r.date]=days[r.date]||{ins:0,outs:0,notBack:0,noOut:0,vis:0};
     if(r.out)d.outs++;if(r.in)d.ins++;
     if(r.out&&!r.in)d.notBack++;
     if(!r.out&&r.in)d.noOut++;});
   visitors.forEach(v=>{const d=days[v.date]=days[v.date]||{ins:0,outs:0,late:0,inside:0,vis:0};d.vis++});
   const keys=Object.keys(days).reverse();
-  return `<div class="card" style="overflow-x:auto"><table>
+  return repBar()+`<div class="card" style="overflow-x:auto"><table>
     <tr><th>วันที่</th><th>เช็คออก (ครั้ง)</th><th>เช็คเข้า (ครั้ง)</th><th>ออกแล้วไม่กลับ</th><th>เข้าไม่เช็คออก</th><th>ผู้มาติดต่อ</th></tr>
     ${keys.map(k=>{const d=days[k];return `<tr><td style="font-weight:600">${esc(k)}</td><td>${d.outs}</td><td>${d.ins}</td>
       <td>${d.notBack?`<span class="badge b-red">${d.notBack} ครั้ง</span>`:'-'}</td>
@@ -898,7 +967,7 @@ function reportExport(){
   return `<div class="grid2">
     <div class="card" style="padding:22px;display:flex;flex-direction:column;gap:10px">
       <div style="font-size:28px">🧑‍💼</div><div style="font-weight:700">ประวัติเข้า-ออกพนักงาน</div>
-      <div style="font-size:12.5px;color:var(--muted)">${records.length} รายการ · วันที่, รหัส, ชื่อ, แผนก, เวลาเข้า-ออก</div>
+      <div style="font-size:12.5px;color:var(--muted)">${(repRows||records).length} รายการตามช่วงที่เลือกในแท็บรายงาน · วันที่, รหัส, ชื่อ, แผนก, เวลาออก-กลับเข้า</div>
       <button class="btn-green" onclick="exportCsv('emp')">⬇️ ส่งออก CSV</button>
     </div>
     <div class="card" style="padding:22px;display:flex;flex-direction:column;gap:10px">
@@ -916,7 +985,7 @@ function exportCsv(kind){
     fname='bwp-visitors.csv';
   }else{
     head='วันที่,รหัสพนักงาน,ชื่อ,แผนก,เวลาออก,เวลากลับเข้า,สถานะ';
-    lines=records.map(r=>[r.date,r.code,r.name,r.dept,r.out||'',r.in||'',!r.out?'เข้าโดยไม่ได้เช็คออก':r.in?'กลับเข้าแล้ว':'ยังไม่กลับเข้า']);
+    lines=(repRows||records).map(r=>[r.date,r.code,r.name,r.dept,r.out||'',r.in||'',!r.out?'เข้าโดยไม่ได้เช็คออก':r.in?'กลับเข้าแล้ว':'ยังไม่กลับเข้า']);
     fname='bwp-attendance.csv';
   }
   const csv='﻿'+[head,...lines.map(l=>l.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(','))].join('\n');

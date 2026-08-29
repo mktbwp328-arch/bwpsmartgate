@@ -265,7 +265,9 @@ function getUser(code){
   return employees.find(e=>e.code===code);
 }
 let records=load('records',[]);   // {type:'emp', code, name, dept, in, out, date}
-let visitors=load('visitors',[]);// {id,name,addr,company,phone,contactCode,contactName,dept,purpose,photo,timeIn,status,timeOut}
+let visitors=load('visitors',[]);
+const myDept=()=>{const e=getUser(session?.code);return e?e.dept:null};
+const canApprove=v=>myRole!=='emp'||v.dept===myDept();// {id,name,addr,company,phone,contactCode,contactName,dept,purpose,photo,timeIn,status,timeOut}
 /* หมุดบริษัทถาวร — แก้ได้ในหน้าตั้งค่า แต่ถ้าล้างข้อมูลจะกลับมาใช้ค่านี้เสมอ */
 const COMPANY_PIN={
   company:'บริษัท เบสท์เวิลด์ อินเตอร์พลาส จำกัด',
@@ -457,7 +459,7 @@ function render(){
 function pageDash(){
   const d=today();
   const vNow=visitors.filter(v=>v.status!=='ออกแล้ว').length;
-  const pend=visitors.filter(v=>v.status==='รออนุมัติออก'&&(myRole!=='emp'||v.contactCode===session.code)).length;
+  const pend=visitors.filter(v=>v.status==='รออนุมัติออก'&&canApprove(v)).length;
   if(myRole==='emp'){
     const outside=isOutside(session.code,d);
     const last=dayEvents(session.code,d).slice(-1)[0];
@@ -474,7 +476,7 @@ function pageDash(){
         <div style="font-size:12.5px;color:var(--muted);margin-top:10px">${summarizeDay(session.code,d)}</div>
         <button class="btn-blue" style="width:100%;padding:14px;margin-top:14px;font-size:15px" onclick="go('myscan')">📷 ไปหน้าสแกนเข้า-ออก</button>
       </div>
-      ${pend?`<div class="card" style="padding:14px 18px;border:1.5px solid #FDE047;display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:16px" onclick="go('approve')"><span style="font-size:22px">🔔</span><div style="flex-grow:1"><b>ผู้มาติดต่อคุณ ${pend} ราย รอกดอนุมัติออก</b><div style="font-size:12.5px;color:var(--muted)">แตะเพื่อไปหน้าอนุมัติ</div></div>›</div>`:''}
+      ${pend?`<div class="card" style="padding:14px 18px;border:1.5px solid #FDE047;display:flex;align-items:center;gap:12px;cursor:pointer;margin-bottom:16px" onclick="go('approve')"><span style="font-size:22px">🔔</span><div style="flex-grow:1"><b>ผู้มาติดต่อแผนกคุณ ${pend} ราย รอกดอนุมัติออก</b><div style="font-size:12.5px;color:var(--muted)">แตะเพื่อไปหน้าอนุมัติ</div></div>›</div>`:''}
       <div class="card" style="padding:18px 20px">
         <div style="font-weight:700;margin-bottom:10px">ประวัติของฉัน</div>
         ${records.filter(r=>r.code===session.code).slice(-6).reverse().map(r=>`<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line2);font-size:13.5px"><span>${esc(r.date)}</span><span>ออก ${r.out||'-'} ${r.in?'· เข้า '+r.in:'<span style="color:var(--orange);font-weight:600">· ยังไม่กลับ</span>'}</span></div>`).join('')||'<div style="color:var(--faint);font-size:13.5px">ยังไม่มีประวัติ</div>'}
@@ -890,25 +892,17 @@ function pageVisitor(){
           <button class="btn-ghost" onclick="$('idcard-file').click()">📷 ถ่าย/เลือกรูปบัตร</button>
           <input type="file" id="idcard-file" accept="image/*" capture="environment" class="hidden" onchange="onIdCard(this)">
           <img id="idcard-preview" class="hidden" style="height:64px;border-radius:8px;border:1px solid var(--line)">
-          <span id="ocr-note" style="font-size:12px;color:var(--faint)">ระบบจะอ่านชื่อและที่อยู่จากบัตรมาเติมให้ (ตรวจสอบและแก้ไขได้)</span>
-        </div>
-        <div style="background:#FFF7ED;border:1px solid #FDBA74;border-radius:9px;padding:10px 13px;margin-top:9px;font-size:12px;color:#7C2D12;line-height:1.65">
-          <b>📷 ถ่ายบัตรให้อ่านออก — ทำตาม 4 ข้อนี้</b>
-          <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px 12px;margin-top:5px">
-            <span>① <b>เข้าใกล้</b> ให้บัตรเต็มกรอบภาพ</span>
-            <span>② <b>ถ่ายตรง</b> จากด้านบน อย่าเอียง</span>
-            <span>③ <b>เลี่ยงแสงสะท้อน</b> บนพลาสติกเคลือบ</span>
-            <span>④ <b>วางบนพื้นสีเข้ม</b> เรียบ ๆ ไม่มีเงา</span>
-          </div>
-        </div>
-        <div style="display:none">
+          <span id="ocr-note" style="font-size:12px;color:var(--faint)">ถ่ายเก็บไว้เป็นหลักฐาน แล้วกรอกชื่อ-ที่อยู่ด้านล่างเอง</span>
         </div></div>
       <div class="field"><label>ชื่อ - นามสกุล *</label><input id="v-name"></div>
       <div class="field"><label>ที่อยู่ *</label><input id="v-addr"></div>
       <div class="grid2"><div class="field"><label>บริษัท</label><input id="v-company"></div>
       <div class="field"><label>เบอร์โทร</label><input id="v-phone"></div></div>
       <div class="grid2">
-        <div class="field"><label>ติดต่อใคร * (รปภ. กรอก)</label><select id="v-contact">${employees.filter(e=>e.active&&getRole(e)!=='guard').map(e=>`<option value="${esc(e.code)}">${esc(e.name)} · ${esc(e.dept)}</option>`).join('')}</select></div>
+        <div class="field"><label>ติดต่อแผนกไหน * (รปภ. กรอก)</label>
+          <select id="v-dept">${deptList().map(d=>`<option value="${esc(d)}">${esc(d)}</option>`).join('')}</select>
+          <div style="font-size:11.5px;color:var(--faint);margin-top:4px">พนักงานทุกคนในแผนกนี้จะเห็นคำขอ และกดอนุมัติออกได้</div>
+        </div>
         <div class="field"><label>วัตถุประสงค์</label><input id="v-purpose" placeholder="เช่น ส่งเอกสารวางบิล"></div>
       </div>
       <button class="btn-blue" style="width:100%;padding:13px" onclick="saveVisitor()">✓ บันทึกและส่งขออนุมัติไปยังพนักงาน</button>
@@ -917,7 +911,7 @@ function pageVisitor(){
       <div style="font-weight:700;margin-bottom:14px">ผู้มาติดต่อวันนี้</div>
       ${visitors.slice().reverse().map(v=>`<div style="border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px;font-size:13.5px">
         <div style="display:flex;justify-content:space-between;gap:8px"><b style="cursor:pointer" onclick="viewVisitor(${v.id})" title="กดเพื่อดูรูป">${(v.photo||v.idcard)?'🖼️ ':''}${esc(v.name)}</b><span class="badge ${v.status==='ออกแล้ว'?'b-green':v.status==='รออนุมัติออก'?'b-yellow':'b-blue'}">${esc(v.status)}</span></div>
-        <div style="color:var(--muted);margin-top:3px">พบ ${esc(v.contactName)} · ${esc(v.dept)} · เข้า ${v.timeIn}${v.timeOut?' · ออก '+v.timeOut:''}</div>
+        <div style="color:var(--muted);margin-top:3px">แผนก${esc(v.dept)} · เข้า ${v.timeIn}${v.timeOut?' · ออก '+v.timeOut:''}</div>
         ${v.status==='กำลังติดต่อ'?`<button class="btn-ghost" style="margin-top:8px;padding:6px 12px;font-size:12.5px" onclick="reqOut(${v.id})">ผู้มาติดต่อจะกลับ — ส่งขออนุมัติออก</button>`:''}
       </div>`).join('')||'<div style="color:var(--faint);font-size:13.5px">ยังไม่มีผู้มาติดต่อ</div>'}
     </div></div></div>`;
@@ -947,167 +941,47 @@ function onVPhoto(inp){
   };
   rd.readAsDataURL(f);
 }
-/* ---- OCR อ่านบัตรประชาชน (Tesseract.js ทำงานในเครื่อง ไม่ส่งรูปออกไปไหน) ---- */
-let ocrWorker=null;
-function ocrNote(msg,color){const n=$('ocr-note');if(n){n.textContent=msg;n.style.color=color||'var(--faint)'}}
-async function ensureOcr(){
-  if(ocrWorker)return ocrWorker;
-  if(!window.Tesseract){
-    ocrNote('กำลังโหลดตัวอ่านบัตร... (ครั้งแรกใช้เวลาสักครู่)');
-    await new Promise((res,rej)=>{
-      const s=document.createElement('script');
-      s.src='https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
-      s.onload=res;s.onerror=()=>rej(new Error('โหลดตัวอ่านไม่ได้ — ตรวจสอบอินเทอร์เน็ต'));
-      document.head.appendChild(s);
-    });
-  }
-  ocrNote('กำลังเตรียมภาษาไทย... (ครั้งแรกใช้เวลาสักครู่)');
-  ocrWorker=await Tesseract.createWorker(['tha','eng'],1,{
-    logger:m=>{if(m.status==='recognizing text')ocrNote('กำลังอ่านบัตร '+Math.round(m.progress*100)+'%','var(--blue)')}
-  });
-  return ocrWorker;
-}
-/* ปรับภาพก่อนอ่าน: ขยายให้ตัวหนังสือใหญ่พอ + แปลงเป็นขาวดำแบบปรับตามพื้นที่
-   (adaptive threshold) ซึ่งทนแสงสะท้อนจากพลาสติกเคลือบบัตรได้ดีกว่าการปรับคอนทราสต์รวม */
-function prepImage(dataUrl,mode){
-  return new Promise(res=>{
-    const img=new Image();
-    img.onload=()=>{
-      const scale=Math.min(3.2,Math.max(1,2200/img.width));   // ตัวหนังสือควรสูง ~30px ขึ้นไป
-      const w=Math.round(img.width*scale),h=Math.round(img.height*scale);
-      const c=document.createElement('canvas');c.width=w;c.height=h;
-      const ctx=c.getContext('2d');
-      ctx.imageSmoothingQuality='high';
-      ctx.drawImage(img,0,0,w,h);
-      const d=ctx.getImageData(0,0,w,h),p=d.data;
-      // เทาก่อน
-      const g=new Float64Array(w*h);
-      for(let i=0,j=0;i<p.length;i+=4,j++)g[j]=0.299*p[i]+0.587*p[i+1]+0.114*p[i+2];
-      if(mode==='gray'){
-        for(let i=0,j=0;i<p.length;i+=4,j++){const v=Math.min(255,Math.max(0,(g[j]-128)*1.5+128));p[i]=p[i+1]=p[i+2]=v}
-      }else{
-        // integral image เพื่อหาค่าเฉลี่ยรอบ ๆ อย่างรวดเร็ว
-        const ii=new Float64Array((w+1)*(h+1));
-        for(let y=0;y<h;y++){let row=0;for(let x=0;x<w;x++){row+=g[y*w+x];ii[(y+1)*(w+1)+x+1]=ii[y*(w+1)+x+1]+row}}
-        const r=Math.max(8,Math.round(w/45));   // รัศมีหน้าต่าง
-        for(let y=0;y<h;y++)for(let x=0;x<w;x++){
-          const x1=Math.max(0,x-r),y1=Math.max(0,y-r),x2=Math.min(w-1,x+r),y2=Math.min(h-1,y+r);
-          const area=(x2-x1+1)*(y2-y1+1);
-          const sum=ii[(y2+1)*(w+1)+x2+1]-ii[y1*(w+1)+x2+1]-ii[(y2+1)*(w+1)+x1]+ii[y1*(w+1)+x1];
-          const mean=sum/area;
-          const v=g[y*w+x]<mean*0.90?0:255;    // ต่ำกว่าค่าเฉลี่ยรอบข้าง = ตัวหนังสือ
-          const i=(y*w+x)*4;p[i]=p[i+1]=p[i+2]=v;
-        }
-      }
-      ctx.putImageData(d,0,0);
-      res(c.toDataURL('image/png'));
-    };
-    img.onerror=()=>res(dataUrl);
-    img.src=dataUrl;
-  });
-}
-function scoreText(t){  // ให้คะแนนผลลัพธ์ เลือกอันที่ดูเป็นข้อมูลบัตรมากที่สุด
-  if(!t)return 0;
-  let s=(t.match(/[ก-๙]/g)||[]).length;                 // จำนวนอักษรไทย
-  if(/ชื่อ|นาย|นาง|น\.?\s?ส\./.test(t))s+=120;
-  if(/ที่?\s?อยู่|ตำบล|แขวง|อำเภอ|เขต|จังหวัด/.test(t))s+=120;
-  if(/\d[\s-]*\d{4}[\s-]*\d{5}/.test(t))s+=100;         // เลขบัตร 13 หลัก
-  if(/เกิดวันที่|บัตรประจำตัว|ประชาชน/.test(t))s+=60;
-  return s;
-}
-function tidy(s){return s.replace(/[|_~`^]/g,' ').replace(/\s{2,}/g,' ').replace(/^[\s:：.,-]+|[\s:：.,-]+$/g,'').trim()}
-function parseThaiId(text){
-  const lines=text.split(/\r?\n/).map(l=>tidy(l)).filter(l=>l.length>1);
-  const out={};
-  // ชื่อ-สกุลภาษาไทย: หาบรรทัดที่ขึ้นต้นด้วยคำนำหน้า
-  for(const l of lines){
-    const m=l.match(/((?:นางสาว|น\.?\s?ส\.?|นาย|นาง)\s*[ก-๙][ก-๙\s]{2,50})/);
-    if(m){out.name=tidy(m[1]).replace(/\s+/g,' ');break}
-  }
-  // ถ้าไม่เจอไทย ลองภาษาอังกฤษ (Name / Last name)
-  if(!out.name){
-    const fn=text.match(/Name\s*[:：]?\s*((?:Mr|Mrs|Miss|Ms)\.?\s*[A-Za-z]+)/i);
-    const ln=text.match(/Last\s*name\s*[:：]?\s*([A-Za-z]+)/i);
-    if(fn)out.name=tidy(fn[1]+(ln?' '+ln[1]:''));
-  }
-  // ที่อยู่: บรรทัดที่มีคำว่า "ที่อยู่" แล้วต่อบรรทัดถัดไปจนเจอวันออกบัตร
-  const ai=lines.findIndex(l=>/ที่?\s?อยู่/.test(l));
-  if(ai>=0){
-    let addr=lines[ai].replace(/^.*?ที่?\s?อยู่/,'');
-    for(let i=ai+1;i<Math.min(ai+3,lines.length);i++){
-      if(/วันออกบัตร|บัตรหมดอายุ|Date of (Issue|Expiry)|เกิดวันที่/i.test(lines[i]))break;
-      addr+=' '+lines[i];
-    }
-    out.addr=tidy(addr);
-  }
-  // เผื่อไม่มีคำว่าที่อยู่ — หาบรรทัดที่มีเลขที่บ้าน + ตำบล/แขวง/อำเภอ/เขต/จังหวัด
-  if(!out.addr){
-    const l=lines.find(l=>/(ต\.|ตำบล|แขวง|อ\.|อำเภอ|เขต|จ\.|จังหวัด)/.test(l)&&/\d/.test(l));
-    if(l)out.addr=tidy(l);
-  }
-  return out;
-}
+/* ---- เก็บรูปบัตรประชาชนไว้อ้างอิง (ไม่มีการอ่านอัตโนมัติ กรอกข้อมูลเอง) ---- */
 function onIdCard(inp){
   const f=inp.files[0];if(!f)return;
   const rd=new FileReader();
   rd.onload=async()=>{
-    const original=rd.result;
-    idcardData=await shrink(original,700,0.72);   // เก็บแบบย่อ (อ่าน OCR จากรูปเต็ม)
+    idcardData=await shrink(rd.result,900,0.75);
     const img=$('idcard-preview');img.src=idcardData;img.classList.remove('hidden');
-    try{
-      const w=await ensureOcr();
-      // ลองอ่านหลายแบบแล้วเลือกผลที่ดีที่สุด (ขาวดำปรับตามพื้นที่ / เทาเพิ่มคอนทราสต์)
-      let best={text:'',score:-1};
-      for(const mode of ['adaptive','gray']){
-        ocrNote('กำลังอ่านบัตร... ('+(mode==='adaptive'?'รอบที่ 1':'รอบที่ 2')+')','var(--blue)');
-        const prepped=await prepImage(original,mode);
-        const {data}=await w.recognize(prepped);
-        const sc=scoreText(data.text||'');
-        if(sc>best.score)best={text:data.text||'',score:sc};
-        if(sc>250)break;   // ผลดีพอแล้ว ไม่ต้องลองต่อ
-      }
-      const data={text:best.text};
-      const got=parseThaiId(data.text||'');
-      let filled=[];
-      if(got.name&&!$('v-name').value){$('v-name').value=got.name;filled.push('ชื่อ')}
-      if(got.addr&&!$('v-addr').value){$('v-addr').value=got.addr;filled.push('ที่อยู่')}
-      if(filled.length){
-        ocrNote('✓ อ่านได้: '+filled.join(' + ')+' — กรุณาตรวจสอบและแก้ไขให้ถูกต้อง','var(--green)');
-        toast('อ่านข้อมูลจากบัตรแล้ว — ตรวจสอบความถูกต้องด้วย','ok');
-      }else{
-        ocrNote('อ่านตัวหนังสือไม่ชัด — กรุณากรอกเอง (ลองถ่ายใหม่ให้ตรง ชัด และแสงพอ)','var(--orange)');
-      }
-    }catch(err){
-      console.warn('OCR error',err);
-      ocrNote('อ่านบัตรอัตโนมัติไม่ได้ ('+err.message+') — กรุณากรอกเอง','var(--orange)');
-    }
+    const n=$('ocr-note');if(n){n.textContent='✓ บันทึกรูปบัตรแล้ว — กรอกชื่อและที่อยู่ด้านล่าง';n.style.color='var(--green)'}
+    toast('บันทึกรูปบัตรประชาชนแล้ว','ok');
   };
   rd.readAsDataURL(f);
+}
+/* รายชื่อแผนก (ไม่รวมแผนกของ รปภ.) */
+function deptList(){
+  return [...new Set(employees.filter(e=>e.active&&getRole(e)!=='guard').map(e=>e.dept).filter(Boolean))].sort();
 }
 function saveVisitor(){
   const v=id=>$(id).value.trim();
   if(!v('v-name')||!v('v-addr')){toast('กรอกชื่อและที่อยู่ให้ครบ','err');return}
-  const c=employees.find(e=>e.code===$('v-contact').value);
+  const dept=$('v-dept').value;
+  if(!dept){toast('เลือกแผนกที่ต้องการติดต่อ','err');return}
   visitors.push({id:Date.now(),name:v('v-name'),addr:v('v-addr'),company:v('v-company'),phone:v('v-phone'),
-    contactCode:c.code,contactName:c.name,dept:c.dept,purpose:v('v-purpose'),
+    dept,contactName:null,contactCode:null,purpose:v('v-purpose'),
     photo:vphotoData,idcard:idcardData,
-    timeIn:nowTime(),date:today(),dayKey:dayKey(),status:'กำลังติดต่อ',timeOut:null});
+    timeIn:nowTime(),date:today(),dayKey:dayKey(),status:'กำลังติดต่อ',timeOut:null,approvedBy:null});
   idcardData=null;vphotoData=null;persist();render();
-  toast(`บันทึกแล้ว — ส่งแจ้งเตือนไปยัง ${c.name} (${c.dept})`,'ok');
+  toast(`บันทึกแล้ว — ส่งแจ้งเตือนไปยังแผนก${dept}`,'ok');
 }
-function reqOut(id){const v=visitors.find(x=>x.id===id);v.status='รออนุมัติออก';persist();render();toast(`ส่งขออนุมัติออกไปยัง ${v.contactName} แล้ว`,'ok')}
+function reqOut(id){const v=visitors.find(x=>x.id===id);v.status='รออนุมัติออก';persist();render();toast(`ส่งขออนุมัติออกไปยังแผนก${v.dept} แล้ว`,'ok')}
 
 /* ================= APPROVE ================= */
 function pageApprove(){
   const me=session.code;
-  const list=visitors.filter(v=>v.status!=='ออกแล้ว'&&(myRole!=='emp'||v.contactCode===me));
+  const list=visitors.filter(v=>v.status!=='ออกแล้ว'&&canApprove(v));
   return `<div class="page">
-    <div style="font-size:12.5px;color:var(--muted);margin-bottom:12px">${myRole==='emp'?'แสดงเฉพาะผู้ที่มาติดต่อคุณ':'แสดงรายการของทุกคน (มุมมองแอดมิน)'}</div>
+    <div style="font-size:12.5px;color:var(--muted);margin-bottom:12px">${myRole==='emp'?'แสดงเฉพาะผู้ที่มาติดต่อแผนก'+(myDept()||'ของคุณ'):'แสดงรายการของทุกคน (มุมมองแอดมิน)'}</div>
     ${list.map(v=>`<div class="card" style="padding:18px 20px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
         <div style="display:flex;gap:12px">
           <div onclick="viewVisitor(${v.id})" title="กดเพื่อดูรูปจาก รปภ." style="width:56px;height:68px;border-radius:9px;background:var(--line2);overflow:hidden;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:24px;cursor:pointer">${v.photo?`<img src="${v.photo}" style="width:100%;height:100%;object-fit:cover">`:'👤'}</div>
-          <div><b style="font-size:15px">${esc(v.name)}</b> ${v.contactCode===me?'<span class="badge b-purple">ติดต่อคุณ</span>':''}<div style="font-size:13px;color:var(--muted);margin-top:3px">${esc(v.company||'-')} · ${esc(v.purpose||'-')}<br>พบ ${esc(v.contactName)} (${esc(v.dept)}) · เข้า ${v.timeIn} · ${v.date}</div></div>
+          <div><b style="font-size:15px">${esc(v.name)}</b> ${myRole==='emp'?'<span class="badge b-purple">แผนกคุณ</span>':''}<div style="font-size:13px;color:var(--muted);margin-top:3px">${esc(v.company||'-')} · ${esc(v.purpose||'-')}<br>ติดต่อแผนก${esc(v.dept)} · เข้า ${v.timeIn} · ${v.date}${v.approvedBy?' · อนุมัติโดย '+esc(v.approvedBy):''}</div></div>
         </div>
         <span class="badge ${v.status==='รออนุมัติออก'?'b-yellow':'b-blue'}" style="align-self:flex-start">${esc(v.status)}</span>
       </div>
@@ -1127,7 +1001,7 @@ function pageApprove(){
 }
 function approveOut(id){
   const v=visitors.find(x=>x.id===id);
-  v.status='ออกแล้ว';v.timeOut=nowTime();persist();render();
+  v.status='ออกแล้ว';v.timeOut=nowTime();v.approvedBy=(getUser(session.code)||{}).name||'ผู้ดูแลระบบ';persist();render();
   toast(`อนุมัติออกแล้ว — แจ้งจุด รปภ. อัตโนมัติ: ${v.name} เซ็นออกเรียบร้อย`,'ok');
 }
 
@@ -1217,16 +1091,16 @@ function reportVis(){
   const rows=visitors.slice().reverse().filter(v=>{
     const k=v.dayKey||(v.id>1e12?dayKey(new Date(v.id)):null);   // รายการเก่า: ดึงวันที่จาก id (timestamp)
     if(k&&(k<repFrom||k>repTo))return false;
-    return !q||[v.name,v.company,v.contactName,v.dept,v.purpose,v.phone].join(' ').toLowerCase().includes(q);
+    return !q||[v.name,v.company,v.approvedBy,v.dept,v.purpose,v.phone].join(' ').toLowerCase().includes(q);
   });
   window._visRows=rows;
   return repBar('vis')+`<div style="font-size:12.5px;color:var(--muted);margin-bottom:8px">พบ ${rows.length} รายการ</div>
   <div class="card" style="overflow-x:auto"><table>
-    <tr><th>วันที่</th><th>รูป</th><th>ชื่อ - นามสกุล</th><th>บริษัท</th><th>พบใคร / แผนก</th><th>วัตถุประสงค์</th><th>เข้า</th><th>ออก</th><th>สถานะ</th></tr>
+    <tr><th>วันที่</th><th>รูป</th><th>ชื่อ - นามสกุล</th><th>บริษัท</th><th>แผนกที่ติดต่อ</th><th>วัตถุประสงค์</th><th>เข้า</th><th>ออก</th><th>สถานะ</th></tr>
     ${rows.map(v=>`<tr><td>${esc(v.date)}</td>
       <td>${(v.photo||v.idcard)?`<img src="${v.photo||v.idcard}" onclick="viewVisitor(${v.id})" title="กดเพื่อดูรูปขนาดเต็ม" style="width:38px;height:46px;object-fit:cover;border-radius:6px;border:1px solid var(--line);cursor:pointer;display:block">`:'<span style="color:var(--faint);font-size:12px">ไม่มีรูป</span>'}</td>
       <td style="font-weight:600">${esc(v.name)}${v.phone?`<div style="font-size:11.5px;color:var(--faint);font-weight:400">${esc(v.phone)}</div>`:''}</td><td>${esc(v.company||'-')}</td>
-      <td>${esc(v.contactName)}<div style="font-size:11.5px;color:var(--faint)">${esc(v.dept)}</div></td><td>${esc(v.purpose||'-')}</td>
+      <td>${esc(v.dept)}<div style="font-size:11.5px;color:var(--faint)">${v.approvedBy?'อนุมัติโดย '+esc(v.approvedBy):'-'}</div></td><td>${esc(v.purpose||'-')}</td>
       <td>${v.timeIn||'-'}</td><td>${v.timeOut||'-'}</td>
       <td><span class="badge ${v.status==='ออกแล้ว'?'b-green':v.status==='รออนุมัติออก'?'b-yellow':'b-blue'}">${esc(v.status)}</span></td></tr>`).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--faint);padding:30px">ไม่พบรายการในช่วงที่เลือก</td></tr>'}
   </table></div>`;
@@ -1245,7 +1119,7 @@ function viewVisitor(id){
         <div>
           <div style="font-size:20px;font-weight:700">${esc(v.name)}</div>
           <div style="font-size:13px;color:#C3D4EE;margin-top:3px">${esc(v.company||'-')}${v.phone?' · '+esc(v.phone):''}</div>
-          <div style="font-size:13px;color:#C3D4EE">พบ ${esc(v.contactName)} (${esc(v.dept)}) · ${esc(v.date)} เข้า ${v.timeIn||'-'}${v.timeOut?' · ออก '+v.timeOut:''}</div>
+          <div style="font-size:13px;color:#C3D4EE">ติดต่อแผนก${esc(v.dept)} · ${esc(v.date)} เข้า ${v.timeIn||'-'}${v.timeOut?' · ออก '+v.timeOut:''}</div>
           ${v.addr?`<div style="font-size:12.5px;color:#9DB8E0;margin-top:4px;max-width:560px">🏠 ${esc(v.addr)}</div>`:''}
         </div>
         <button onclick="closePhoto()" style="background:rgba(255,255,255,.14);color:#fff;padding:10px 18px;border-radius:9px;font-size:14px;flex-shrink:0">✕ ปิด</button>
@@ -1291,8 +1165,8 @@ function reportExport(){
 function exportCsv(kind){
   let head,lines,fname;
   if(kind==='vis'){
-    head='วันที่,ชื่อ,บริษัท,ผู้ถูกติดต่อ,แผนก,วัตถุประสงค์,เวลาเข้า,เวลาออก,สถานะ';
-    lines=visitors.map(v=>[v.date,v.name,v.company||'',v.contactName,v.dept,v.purpose||'',v.timeIn||'',v.timeOut||'',v.status]);
+    head='วันที่,ชื่อ,บริษัท,แผนกที่ติดต่อ,ผู้อนุมัติออก,วัตถุประสงค์,เวลาเข้า,เวลาออก,สถานะ';
+    lines=visitors.map(v=>[v.date,v.name,v.company||'',v.dept,v.approvedBy||'',v.purpose||'',v.timeIn||'',v.timeOut||'',v.status]);
     fname='bwp-visitors.csv';
   }else{
     head='วันที่,รหัสพนักงาน,ชื่อ,แผนก,เวลาออก,เวลากลับเข้า,สถานะ';

@@ -12,7 +12,7 @@
         { "key": "X-Robots-Tag", "value": "noindex, nofollow" },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://cpvlchkqazsdsiviajqg.supabase.co https://cdn.jsdelivr.net https://tessdata.projectnaptha.com https://nominatim.openstreetmap.org; frame-ancestors 'none'; base-uri 'self'; form-action 'none'"
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://cpvlchkqazsdsiviajqg.supabase.co https://nominatim.openstreetmap.org; frame-ancestors 'none'; base-uri 'self'; form-action 'none'"
         }
       ]
     },

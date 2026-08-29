@@ -267,7 +267,8 @@ function getUser(code){
 let records=load('records',[]);   // {type:'emp', code, name, dept, in, out, date}
 let visitors=load('visitors',[]);
 const myDept=()=>{const e=getUser(session?.code);return e?e.dept:null};
-const canApprove=v=>myRole!=='emp'||v.dept===myDept();// {id,name,addr,company,phone,contactCode,contactName,dept,purpose,photo,timeIn,status,timeOut}
+// อนุมัติได้เมื่อ: เป็นแอดมิน/รปภ. หรือถูกกำหนดเป็นผู้อนุมัติของแผนกนั้น
+const canApprove=v=>myRole!=='emp'||(settings.approvers?.[v.dept]||[]).includes(session?.code);// {id,name,addr,company,phone,contactCode,contactName,dept,purpose,photo,timeIn,status,timeOut}
 /* หมุดบริษัทถาวร — แก้ได้ในหน้าตั้งค่า แต่ถ้าล้างข้อมูลจะกลับมาใช้ค่านี้เสมอ */
 const COMPANY_PIN={
   company:'บริษัท เบสท์เวิลด์ อินเตอร์พลาส จำกัด',
@@ -953,10 +954,10 @@ function onIdCard(inp){
   };
   rd.readAsDataURL(f);
 }
-/* รายชื่อแผนก (ไม่รวมแผนกของ รปภ.) */
-function deptList(){
-  return [...new Set(employees.filter(e=>e.active&&getRole(e)!=='guard').map(e=>e.dept).filter(Boolean))].sort();
-}
+/* แผนกที่เปิดให้ผู้มาติดต่อเลือก + ผู้ที่อนุมัติได้ในแผนกนั้น (กำหนดในหน้าตั้งค่า) */
+const approverMap=()=>settings.approvers||{};
+function deptList(){return Object.keys(approverMap())}
+function approversOf(dept){return (approverMap()[dept]||[])}
 function saveVisitor(){
   const v=id=>$(id).value.trim();
   if(!v('v-name')||!v('v-addr')){toast('กรอกชื่อและที่อยู่ให้ครบ','err');return}
@@ -1210,7 +1211,58 @@ function pageSettings(){
     <div style="border-top:1px solid var(--line2);padding-top:16px;margin-top:16px">
       <button class="btn-ghost" style="color:var(--red)" onclick="if(confirm('ล้างข้อมูลทดลองทั้งหมด?')){localStorage.clear();location.reload()}">🗑️ ล้างข้อมูลทดลองทั้งหมด</button>
     </div>
+  </div>
+
+  <div class="card" style="padding:22px;max-width:640px;margin-top:16px">
+    <div style="font-weight:700;margin-bottom:6px">👥 แผนกและผู้อนุมัติผู้มาติดต่อ</div>
+    <div style="font-size:12.5px;color:var(--muted);margin-bottom:16px">รปภ. จะเห็นเฉพาะแผนกในรายการนี้ · เฉพาะคนที่กำหนดไว้เท่านั้นที่เห็นคำขอและกดอนุมัติออกได้</div>
+    ${deptList().map(d=>`
+      <div style="border:1px solid var(--line);border-radius:11px;padding:13px 15px;margin-bottom:11px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:9px">
+          <b style="font-size:14px">${esc(d)}</b>
+          <div style="display:flex;gap:6px;align-items:center">
+            <span class="badge ${approversOf(d).length?'b-green':'b-red'}">${approversOf(d).length} คน</span>
+            <button class="btn-ghost" style="padding:4px 9px;color:var(--red)" title="ลบแผนกนี้" onclick="delDept('${esc(d)}')">🗑️</button>
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:9px">
+          ${approversOf(d).map(c=>{const e=getUser(c);return `<span style="display:inline-flex;align-items:center;gap:6px;background:#EFF5FF;border:1px solid #BFDBFE;border-radius:999px;padding:4px 6px 4px 11px;font-size:12.5px">${esc(e?e.name:c)}<button onclick="delApprover('${esc(d)}','${esc(c)}')" style="background:none;padding:0 4px;color:#B91C1C;font-size:14px;line-height:1">×</button></span>`}).join('')||'<span style="font-size:12.5px;color:var(--red)">⚠ ยังไม่ได้กำหนดผู้อนุมัติ — คำขอจะไม่มีใครเห็น</span>'}
+        </div>
+        <div style="display:flex;gap:8px">
+          <select id="add-${esc(d)}" style="flex-grow:1;font-size:13px">
+            <option value="">+ เพิ่มผู้อนุมัติ...</option>
+            ${employees.filter(e=>e.active&&getRole(e)!=='guard'&&!approversOf(d).includes(e.code)).map(e=>`<option value="${esc(e.code)}">${esc(e.name)} · ${esc(e.dept||'-')}</option>`).join('')}
+          </select>
+          <button class="btn-blue" style="padding:8px 15px;font-size:13px" onclick="addApprover('${esc(d)}')">เพิ่ม</button>
+        </div>
+      </div>`).join('')||'<div style="color:var(--faint);font-size:13.5px;padding:16px 0;text-align:center">ยังไม่ได้กำหนดแผนก — เพิ่มด้านล่าง</div>'}
+    <div style="display:flex;gap:8px;margin-top:14px;border-top:1px solid var(--line2);padding-top:14px">
+      <input id="new-dept" placeholder="ชื่อแผนกใหม่ เช่น ฝ่ายผลิต" style="flex-grow:1" onkeydown="if(event.key==='Enter')addDept()">
+      <button class="btn-green" style="white-space:nowrap" onclick="addDept()">＋ เพิ่มแผนก</button>
+    </div>
   </div></div>`;
+}
+/* ---- จัดการแผนกและผู้อนุมัติ ---- */
+function addDept(){
+  const d=$('new-dept').value.trim();
+  if(!d){toast('พิมพ์ชื่อแผนกก่อน','err');return}
+  settings.approvers=settings.approvers||{};
+  if(settings.approvers[d]){toast('มีแผนกนี้อยู่แล้ว','err');return}
+  settings.approvers[d]=[];persist();render();toast('เพิ่มแผนก '+d+' แล้ว — อย่าลืมกำหนดผู้อนุมัติ','ok');
+}
+function delDept(d){
+  if(!confirm('ลบแผนก "'+d+'" ออกจากรายการ?\nรปภ. จะเลือกแผนกนี้ไม่ได้อีก (ข้อมูลผู้มาติดต่อเดิมยังอยู่)'))return;
+  delete settings.approvers[d];persist();render();toast('ลบแผนกแล้ว','ok');
+}
+function addApprover(d){
+  const c=$('add-'+d).value;
+  if(!c){toast('เลือกพนักงานก่อน','err');return}
+  settings.approvers[d]=[...(settings.approvers[d]||[]),c];
+  persist();render();toast('เพิ่มผู้อนุมัติแล้ว','ok');
+}
+function delApprover(d,c){
+  settings.approvers[d]=(settings.approvers[d]||[]).filter(x=>x!==c);
+  persist();render();toast('นำออกจากผู้อนุมัติแล้ว','ok');
 }
 function restoreCompanyPin(){
   $('s-company').value=COMPANY_PIN.company;$('s-address').value=COMPANY_PIN.address;

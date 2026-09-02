@@ -896,7 +896,6 @@ function pageVisitor(){
           <span id="ocr-note" style="font-size:12px;color:var(--faint)">ถ่ายเก็บไว้เป็นหลักฐาน แล้วกรอกชื่อ-ที่อยู่ด้านล่างเอง</span>
         </div></div>
       <div class="field"><label>ชื่อ - นามสกุล *</label><input id="v-name"></div>
-      <div class="field"><label>ที่อยู่ *</label><input id="v-addr"></div>
       <div class="grid2"><div class="field"><label>บริษัท</label><input id="v-company"></div>
       <div class="field"><label>เบอร์โทร</label><input id="v-phone"></div></div>
       <div class="grid2">
@@ -959,11 +958,11 @@ const approverMap=()=>settings.approvers||{};
 function deptList(){return Object.keys(approverMap())}
 function approversOf(dept){return (approverMap()[dept]||[])}
 function saveVisitor(){
-  const v=id=>$(id).value.trim();
-  if(!v('v-name')||!v('v-addr')){toast('กรอกชื่อและที่อยู่ให้ครบ','err');return}
+  const v=id=>$(id)?$(id).value.trim():'';
+  if(!v('v-name')){toast('กรอกชื่อ-นามสกุลก่อน','err');return}
   const dept=$('v-dept').value;
   if(!dept){toast('เลือกแผนกที่ต้องการติดต่อ','err');return}
-  visitors.push({id:Date.now(),name:v('v-name'),addr:v('v-addr'),company:v('v-company'),phone:v('v-phone'),
+  visitors.push({id:Date.now(),name:v('v-name'),addr:'',company:v('v-company'),phone:v('v-phone'),
     dept,contactName:null,contactCode:null,purpose:v('v-purpose'),
     photo:vphotoData,idcard:idcardData,
     timeIn:nowTime(),date:today(),dayKey:dayKey(),status:'กำลังติดต่อ',timeOut:null,approvedBy:null});

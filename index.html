@@ -33,6 +33,8 @@ input:focus,select:focus,textarea:focus{outline:none;border-color:var(--blue)}
 .b-purple{background:#F3E8FF;color:#7C3AED}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px}
 .hidden{display:none!important}
+/* ซ่อนแบบยังอยู่ในหน้า — iOS Safari จะเมิน capture ถ้า input เป็น display:none ทำให้เปิดอัลบั้มแทนกล้อง */
+.vhide{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;clip:rect(0 0 0 0);border:0;padding:0;margin:-1px}
 label{font-size:13px;font-weight:600;color:#334155;display:block;margin:0 0 5px}
 .field{margin-bottom:13px}
 table{width:100%;border-collapse:collapse;font-size:13.5px}
@@ -62,6 +64,7 @@ td{padding:11px 14px;border-top:1px solid var(--line2)}
   .page{padding:16px 16px 110px}          /* เว้นที่ให้แถบเมนูล่าง */
   #main{min-width:0;overflow-x:hidden}
   table{font-size:12.5px}
+  #pages button{min-height:44px}   /* ขนาดปุ่มขั้นต่ำสำหรับแตะบนมือถือ */
 }
 #mobilenav{display:none;position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid var(--line);z-index:50;padding:6px 4px 10px;justify-content:space-around}
 #toast{position:fixed;top:18px;right:18px;z-index:100;display:flex;flex-direction:column;gap:8px}
@@ -882,19 +885,25 @@ function pageVisitor(){
       <div class="field"><label>รูปถ่ายผู้มาติดต่อ *</label>
         <div style="display:flex;gap:12px;align-items:center">
           <div id="vphoto-box" style="width:76px;height:92px;border-radius:10px;background:var(--line2);display:flex;align-items:center;justify-content:center;overflow:hidden;flex-shrink:0;font-size:30px">👤</div>
-          <div style="display:flex;flex-direction:column;gap:6px">
-            <button class="btn-navy" onclick="$('vphoto-file').click()">📸 ถ่ายรูปผู้มาติดต่อ</button>
-            <input type="file" id="vphoto-file" accept="image/*" capture="user" class="hidden" onchange="onVPhoto(this)">
+          <div style="display:flex;flex-direction:column;gap:6px;flex-grow:1;min-width:0">
+            <div style="display:flex;gap:7px;flex-wrap:wrap">
+              <button class="btn-navy" onclick="pickPhoto('vphoto-file')">📸 ถ่ายรูป</button>
+              <button class="btn-ghost" onclick="pickPhoto('vphoto-album')">🖼️ เลือกจากอัลบั้ม</button>
+            </div>
+            <input type="file" id="vphoto-file" accept="image/*" capture="user" class="vhide" onchange="onVPhoto(this)">
+            <input type="file" id="vphoto-album" accept="image/*" class="vhide" onchange="onVPhoto(this)">
             <span style="font-size:11.5px;color:var(--faint)">รูปจะแนบไปกับคำขออนุมัติให้พนักงานเห็น</span>
           </div>
         </div></div>
       <div class="field"><label>รูปบัตรประชาชน</label>
-        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-          <button class="btn-ghost" onclick="$('idcard-file').click()">📷 ถ่าย/เลือกรูปบัตร</button>
-          <input type="file" id="idcard-file" accept="image/*" capture="environment" class="hidden" onchange="onIdCard(this)">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn-navy" onclick="pickPhoto('idcard-file')">📷 ถ่ายรูปบัตร</button>
+          <button class="btn-ghost" onclick="pickPhoto('idcard-album')">🖼️ เลือกจากอัลบั้ม</button>
+          <input type="file" id="idcard-file" accept="image/*" capture="environment" class="vhide" onchange="onIdCard(this)">
+          <input type="file" id="idcard-album" accept="image/*" class="vhide" onchange="onIdCard(this)">
           <img id="idcard-preview" class="hidden" style="height:64px;border-radius:8px;border:1px solid var(--line)">
-          <span id="ocr-note" style="font-size:12px;color:var(--faint)">ถ่ายเก็บไว้เป็นหลักฐาน แล้วกรอกชื่อ-ที่อยู่ด้านล่างเอง</span>
-        </div></div>
+        </div>
+        <div id="ocr-note" style="font-size:12px;color:var(--faint);margin-top:6px">ถ่ายเก็บไว้เป็นหลักฐาน แล้วกรอกชื่อด้านล่างเอง</div></div>
       <div class="field"><label>ชื่อ - นามสกุล *</label><input id="v-name"></div>
       <div class="grid2"><div class="field"><label>บริษัท</label><input id="v-company"></div>
       <div class="field"><label>เบอร์โทร</label><input id="v-phone"></div></div>
@@ -917,6 +926,12 @@ function pageVisitor(){
     </div></div></div>`;
 }
 let idcardData=null,vphotoData=null;
+/* เปิดตัวเลือกไฟล์ — ล้างค่าเดิมก่อน เพื่อให้ถ่ายรูปเดิมซ้ำแล้วยัง onchange ทำงาน */
+function pickPhoto(id){
+  const el=$(id);if(!el)return;
+  el.value='';
+  el.click();
+}
 function shrink(dataUrl,maxW,q){   // ย่อรูปก่อนเก็บ (พื้นที่จำกัด)
   return new Promise(res=>{
     const img=new Image();
@@ -948,7 +963,7 @@ function onIdCard(inp){
   rd.onload=async()=>{
     idcardData=await shrink(rd.result,900,0.75);
     const img=$('idcard-preview');img.src=idcardData;img.classList.remove('hidden');
-    const n=$('ocr-note');if(n){n.textContent='✓ บันทึกรูปบัตรแล้ว — กรอกชื่อและที่อยู่ด้านล่าง';n.style.color='var(--green)'}
+    const n=$('ocr-note');if(n){n.textContent='✓ บันทึกรูปบัตรแล้ว — กรอกชื่อด้านล่าง';n.style.color='var(--green)'}
     toast('บันทึกรูปบัตรประชาชนแล้ว','ok');
   };
   rd.readAsDataURL(f);

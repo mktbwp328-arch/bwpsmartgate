@@ -887,7 +887,7 @@ function pageVisitor(){
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:9px">
           <button class="btn-navy" onclick="pickPhoto('shot-cam')">📸 ถ่ายรูป</button>
           <button class="btn-ghost" onclick="pickPhoto('shot-album')">🖼️ เลือกจากอัลบั้ม</button>
-          <input type="file" id="shot-cam" accept="image/*" capture="environment" multiple class="vhide" onchange="onShot(this)">
+          <input type="file" id="shot-cam" accept="image/*" capture="environment" class="vhide" onchange="onShot(this)">
           <input type="file" id="shot-album" accept="image/*" multiple class="vhide" onchange="onShot(this)">
         </div>
         <div id="shot-list" style="display:flex;gap:8px;flex-wrap:wrap"></div>

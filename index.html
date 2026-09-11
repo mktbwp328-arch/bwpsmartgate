@@ -1048,7 +1048,7 @@ function pageVisitor(){
     </div>
     <div class="card" style="padding:20px">
       <div style="font-weight:700;margin-bottom:14px">ผู้มาติดต่อวันนี้</div>
-      ${visitors.slice().reverse().map(v=>`<div style="border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px;font-size:13.5px">
+      ${newestFirst(visitors).map(v=>`<div style="border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px;font-size:13.5px">
         <div style="display:flex;justify-content:space-between;gap:8px"><b style="cursor:pointer" onclick="viewVisitor(${v.id})" title="กดเพื่อดูรูป">${visitorShots(v).length?'🖼️ ':''}${esc(v.name)}</b><span class="badge ${v.status==='ออกแล้ว'?'b-green':v.status==='รออนุมัติออก'?'b-yellow':'b-blue'}">${esc(v.status)}</span></div>
         <div style="color:var(--muted);margin-top:3px">แผนก${esc(v.dept)} · เข้า ${v.timeIn}${v.timeOut?' · ออก '+v.timeOut:''}</div>
         ${v.status==='กำลังติดต่อ'?`<button class="btn-ghost" style="margin-top:8px;padding:6px 12px;font-size:12.5px" onclick="reqOut(${v.id})">ผู้มาติดต่อจะกลับ — ส่งขออนุมัติออก</button>`:''}
@@ -1058,6 +1058,8 @@ function pageVisitor(){
 let shots=[];   // รูปที่ถ่ายไว้ก่อนกดบันทึก
 /* รูปของผู้มาติดต่อ 1 ราย (รองรับข้อมูลเก่าที่แยก photo/idcard) */
 const visitorShots=v=>(v.shots&&v.shots.length)?v.shots:[v.photo,v.idcard].filter(Boolean);
+/* เรียงรายการล่าสุดขึ้นก่อนเสมอ (id คือ timestamp ตอนลงทะเบียน) */
+const newestFirst=list=>list.slice().sort((a,b)=>b.id-a.id);
 /* ---- เบราว์เซอร์ในแอป (LINE / Facebook) เรียกกล้องไม่ได้ — แจ้งให้เปิดเบราว์เซอร์จริง ---- */
 const inAppName=(()=>{const u=navigator.userAgent||'';
   if(/\bLine\//i.test(u))return 'LINE';
@@ -1189,7 +1191,7 @@ async function reqOut(id){
 /* ================= APPROVE ================= */
 function pageApprove(){
   const me=session.code;
-  const list=visitors.filter(v=>v.status!=='ออกแล้ว'&&canApprove(v));
+  const list=newestFirst(visitors.filter(v=>v.status!=='ออกแล้ว'&&canApprove(v)));
   return `<div class="page">
     <div style="font-size:12.5px;color:var(--muted);margin-bottom:12px">${myRole==='emp'?'แสดงเฉพาะผู้ที่มาติดต่อแผนก'+(myDept()||'ของคุณ'):'แสดงรายการของทุกคน (มุมมองแอดมิน)'}</div>
     ${list.map(v=>`<div class="card" style="padding:18px 20px;margin-bottom:12px">
@@ -1320,7 +1322,7 @@ function reportVis(){
     return repBar('vis')+'<div class="card" style="padding:40px;text-align:center;color:var(--faint)">กำลังโหลด...</div>'}
   if(repVisLoading)return repBar('vis')+'<div class="card" style="padding:40px;text-align:center;color:var(--faint)">กำลังโหลด...</div>';
   const q=repQ.toLowerCase();
-  const src=visTable?(repVisRows||[]):visitors.slice().reverse();
+  const src=newestFirst(visTable?(repVisRows||[]):visitors);
   const rows=src.filter(v=>{
     const k=v.dayKey||(v.id>1e12?dayKey(new Date(v.id)):null);   // รายการเก่า: ดึงวันที่จาก id (timestamp)
     if(!visTable&&k&&(k<repFrom||k>repTo))return false;

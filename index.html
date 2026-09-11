@@ -212,6 +212,20 @@ async function recQuery(from,to,q){  // สำหรับหน้าราย�
   try{return (await sbFetch(url)).map(fromRow)}catch(e){console.warn(e);return null}
 }
 let sbPending=0;
+/* ส่งขึ้นระบบทันทีและรอผล — ใช้กับงานที่อีกฝ่ายต้องเห็นเดี๋ยวนั้น เช่น อนุมัติผู้มาติดต่อ */
+async function pushNow(key,data){
+  save(key,data);save('session',session);
+  if(!sbOnline)return false;
+  sbPending++;
+  try{
+    await sbFetch('smartgate_store?on_conflict=key',{method:'POST',
+      headers:{'Prefer':'resolution=merge-duplicates'},
+      body:JSON.stringify([{key,data,updated_at:new Date().toISOString()}])});
+    window._sbStamp=null;   // บังคับให้รอบถัดไปดึงข้อมูลใหม่จริง
+    return true;
+  }catch(e){console.warn('push fail',e);return false}
+  finally{sbPending--}
+}
 function sbPush(key,data){
   if(!sbOnline)return;
   sbPending++;
@@ -264,9 +278,29 @@ async function sbLoad(force){
 function paintCloudDot(){
   const dot=$('cloud-dot');if(!dot)return;
   dot.style.background=sbOnline?'#22C55E':'#EAB308';
-  dot.title=sbOnline?'ซิงก์ข้อมูลแล้ว':'ออฟไลน์ — ข้อมูลอยู่ในเครื่องเท่านั้น';
+  dot.title=sbOnline?('ซิงก์ข้อมูลแล้ว · อัปเดตอัตโนมัติทุก '+(syncEvery()/1000)+' วิ'):'ออฟไลน์ — ข้อมูลอยู่ในเครื่องเท่านั้น';
+  if(sbOnline){dot.style.transition='none';dot.style.transform='scale(1.9)';
+    setTimeout(()=>{dot.style.transition='transform .5s';dot.style.transform='scale(1)'},30)}
 }
-setInterval(()=>{if(sbOnline)sbLoad()},30000); // ดึงข้อมูลใหม่ทุก 30 วิ (คนอื่นแก้ก็เห็น)
+/* ---- ดึงข้อมูลใหม่แบบปรับความถี่ตามหน้าที่เปิดอยู่ ----
+   หน้าที่ต้องเห็นผลทันที (ผู้มาติดต่อ / อนุมัติ) เช็คทุก 3 วิ · หน้าอื่นทุก 20 วิ
+   คิวรีที่ใช้เช็คเบามาก (ดึงแค่ key กับเวลาแก้ไขล่าสุด) จึงถี่ได้โดยไม่เปลืองเน็ต */
+const FAST_PAGES=['visitor','approve','dash'];
+function syncEvery(){
+  const p=(typeof cur==='undefined')?null:cur;   // ตอนบูตยังไม่มีตัวแปรหน้า
+  return FAST_PAGES.includes(p)?3000:20000;
+}
+let syncTimer=null;
+function scheduleSync(){
+  clearTimeout(syncTimer);
+  syncTimer=setTimeout(async()=>{
+    if(sbOnline&&document.visibilityState==='visible')await sbLoad();
+    scheduleSync();
+  },syncEvery());
+}
+// กลับมาที่หน้าจอ/สลับแท็บกลับมา — ดึงทันที ไม่ต้องรอรอบถัดไป
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'){sbLoad();scheduleSync()}});
+addEventListener('focus',()=>{if(sbOnline)sbLoad()});
 
 let employees=load('employees',[]);
 /* บทบาท: admin = เมนูเต็ม / guard = จุด รปภ. / emp = พนักงานทั่วไป */
@@ -1024,7 +1058,11 @@ function saveVisitor(){
   shots=[];persist();render();
   toast(`บันทึกแล้ว — ส่งแจ้งเตือนไปยังแผนก${dept}`,'ok');
 }
-function reqOut(id){const v=visitors.find(x=>x.id===id);v.status='รออนุมัติออก';persist();render();toast(`ส่งขออนุมัติออกไปยังแผนก${v.dept} แล้ว`,'ok')}
+async function reqOut(id){
+  const v=visitors.find(x=>x.id===id);v.status='รออนุมัติออก';render();
+  const ok=await pushNow('visitors',visitors);
+  toast(ok?`ส่งขออนุมัติออกไปยังแผนก${v.dept} แล้ว`:'ส่งขึ้นระบบไม่สำเร็จ — ตรวจอินเทอร์เน็ต',ok?'ok':'err');
+}
 
 /* ================= APPROVE ================= */
 function pageApprove(){
@@ -1054,10 +1092,13 @@ function pageApprove(){
     </div>`).join('')||'<div class="card" style="padding:40px;text-align:center;color:var(--faint)">ไม่มีรายการรออนุมัติ — ลงทะเบียนผู้มาติดต่อที่หน้า "ผู้มาติดต่อ" ก่อน</div>'}
   </div>`;
 }
-function approveOut(id){
+async function approveOut(id){
   const v=visitors.find(x=>x.id===id);
-  v.status='ออกแล้ว';v.timeOut=nowTime();v.approvedBy=(getUser(session.code)||{}).name||'ผู้ดูแลระบบ';persist();render();
-  toast(`อนุมัติออกแล้ว — แจ้งจุด รปภ. อัตโนมัติ: ${v.name} เซ็นออกเรียบร้อย`,'ok');
+  v.status='ออกแล้ว';v.timeOut=nowTime();v.approvedBy=(getUser(session.code)||{}).name||'ผู้ดูแลระบบ';
+  render();
+  const ok=await pushNow('visitors',visitors);   // ส่งขึ้นระบบทันทีและรอผล
+  toast(ok?`อนุมัติออกแล้ว — แจ้งจุด รปภ. เรียบร้อย: ${v.name}`
+          :`บันทึกในเครื่องแล้ว แต่ส่งขึ้นระบบไม่สำเร็จ — ตรวจอินเทอร์เน็ตแล้วลองใหม่`,ok?'ok':'err');
 }
 
 /* ================= REPORT ================= */
@@ -1382,6 +1423,7 @@ if(session&&session.at&&Date.now()-session.at>SESSION_MAX_H*3600e3){session=null
 try{const m=sessionStorage.getItem('logoutMsg');if(m){sessionStorage.removeItem('logoutMsg');setTimeout(()=>toast(m,'err'),400)}}catch(e){}
 showInAppBar();
 bootSession();
+scheduleSync();   // เริ่มดึงข้อมูลอัตโนมัติหลังทุกอย่างพร้อม
 </script>
 </body>
 </html>

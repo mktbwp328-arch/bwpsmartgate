@@ -200,6 +200,45 @@ async function recLoadDay(k){   // โหลดรายการของวั
   if(!recTable)return null;
   try{return (await sbFetch(`smartgate_records?day_key=eq.${k}&order=id.asc`)).map(fromRow)}catch(e){return null}
 }
+/* ---- ผู้มาติดต่อ: เก็บเป็นตารางจริง หนึ่งแถวต่อหนึ่งคน ----
+   รายการที่ดึงมาแสดง "ไม่รวมรูป" เพื่อให้เบา · รูปโหลดเฉพาะตอนกดดู */
+let visTable=false;
+const VIS_COLS='id,name,company,phone,dept,purpose,visit_date,day_key,time_in,time_out,status,approved_by';
+const photoCache={};        // {id: [รูป]}
+function toVRow(v){return {id:v.id,name:v.name,company:v.company||null,phone:v.phone||null,dept:v.dept,
+  purpose:v.purpose||null,photos:v.shots||[],visit_date:v.date,day_key:v.dayKey||dayKey(),
+  time_in:v.timeIn||null,time_out:v.timeOut||null,status:v.status,approved_by:v.approvedBy||null}}
+function fromVRow(x){return {id:Number(x.id),name:x.name,company:x.company||'',phone:x.phone||'',dept:x.dept,
+  purpose:x.purpose||'',addr:'',date:x.visit_date,dayKey:x.day_key,timeIn:x.time_in,timeOut:x.time_out,
+  status:x.status,approvedBy:x.approved_by,shots:photoCache[x.id]||(x.photos||undefined)}}
+async function vQuery(from,to){
+  if(!visTable)return null;
+  try{return (await sbFetch(`smartgate_visitors?select=${VIS_COLS}&day_key=gte.${from}&day_key=lte.${to}&order=id.desc&limit=2000`)).map(fromVRow)}
+  catch(e){console.warn(e);return null}
+}
+async function vInsert(v){
+  if(!visTable)return false;
+  try{await sbFetch('smartgate_visitors',{method:'POST',body:JSON.stringify([toVRow(v)])});
+    photoCache[v.id]=v.shots||[];return true}
+  catch(e){console.warn('บันทึกผู้มาติดต่อไม่สำเร็จ',e);return false}
+}
+async function vUpdate(id,patch){
+  if(!visTable)return false;
+  try{await sbFetch('smartgate_visitors?id=eq.'+id,{method:'PATCH',
+    body:JSON.stringify({...patch,updated_at:new Date().toISOString()})});return true}
+  catch(e){console.warn('อัปเดตผู้มาติดต่อไม่สำเร็จ',e);return false}
+}
+async function vDelete(id){
+  if(!visTable)return false;
+  try{await sbFetch('smartgate_visitors?id=eq.'+id,{method:'DELETE'});return true}catch(e){return false}
+}
+async function loadPhotos(id){   // โหลดรูปเฉพาะตอนกดดู
+  if(photoCache[id])return photoCache[id];
+  if(!visTable)return [];
+  try{const r=await sbFetch('smartgate_visitors?select=photos&id=eq.'+id);
+    photoCache[id]=(r[0]&&r[0].photos)||[];return photoCache[id]}
+  catch(e){return []}
+}
 async function recDelete(id){
   if(!recTable)return false;
   try{await sbFetch('smartgate_records?id=eq.'+id,{method:'DELETE'});return true}
@@ -266,7 +305,28 @@ async function sbLoad(force){
         records=rows;
       }
     }else if(m.records)records=m.records;else sbPush('records',records);
-    if(m.visitors)visitors=m.visitors;else sbPush('visitors',visitors);
+    // ผู้มาติดต่อ: ใช้ตารางถ้ามี / ไม่มีก็ใช้ก้อน JSON แบบเดิม
+    try{await sbFetch('smartgate_visitors?limit=1');visTable=true}catch(e){visTable=false}
+    if(visTable){
+      if(!m.visitors_migrated&&Array.isArray(m.visitors)&&m.visitors.length){   // ย้ายข้อมูลเดิมขึ้นตารางครั้งเดียว
+        let n=0;
+        for(const v of m.visitors){
+          const row=toVRow({...v,shots:(v.shots&&v.shots.length)?v.shots:[v.photo,v.idcard].filter(Boolean),
+            dayKey:v.dayKey||(v.id>1e12?dayKey(new Date(v.id)):dayKey())});
+          if(await sbFetch('smartgate_visitors?on_conflict=id',{method:'POST',
+            headers:{'Prefer':'resolution=merge-duplicates'},body:JSON.stringify([row])}).then(()=>1).catch(()=>0))n++;
+        }
+        await sbFetch('smartgate_store?on_conflict=key',{method:'POST',headers:{'Prefer':'resolution=merge-duplicates'},
+          body:JSON.stringify([{key:'visitors_migrated',data:true,updated_at:new Date().toISOString()},
+                               {key:'visitors',data:[],updated_at:new Date().toISOString()}])}).catch(()=>{});
+        console.log('ย้ายผู้มาติดต่อเดิม '+n+' รายขึ้นตารางแล้ว');
+        window._sbStamp=null;window._lastSync=null;
+      }
+      const from=dayKey(new Date(Date.now()-45*864e5));   // เก็บไว้ใช้งาน 45 วันล่าสุด
+      const rows=await vQuery(from,dayKey());
+      if(rows)visitors=rows;
+    }
+    else if(m.visitors)visitors=m.visitors;else sbPush('visitors',visitors);
     if(m.settings)settings={...settings,...m.settings};else sbPush('settings',settings);
     save('employees',employees);save('records',records);save('visitors',visitors);save('settings',settings);
     if($('app').classList.contains('hidden')){if(typeof bootSession==='function')bootSession()} // ข้อมูลเพิ่งมาถึง — ลองเข้าระบบอีกครั้ง
@@ -332,8 +392,9 @@ let settings=load('settings',{...COMPANY_PIN});
 if(settings.lat==null){settings.lat=COMPANY_PIN.lat;settings.lng=COMPANY_PIN.lng} // เผื่อข้อมูลเก่าที่ยังไม่ได้ปักหมุด
 let session=load('session',null);
 const persist=()=>{save('employees',employees);save('records',records);save('visitors',visitors);save('settings',settings);save('session',session);
-  sbPush('employees',employees);sbPush('visitors',visitors);sbPush('settings',settings);
-  if(!recTable)sbPush('records',records)};   // มีตารางแล้วไม่ต้องดันก้อน JSON ทับ
+  sbPush('employees',employees);sbPush('settings',settings);
+  if(!recTable)sbPush('records',records);      // มีตารางแล้วไม่ต้องดันก้อน JSON ทับ
+  if(!visTable)sbPush('visitors',visitors)};
 
 /* ================= UTIL ================= */
 const $=id=>document.getElementById(id);
@@ -1089,9 +1150,9 @@ async function saveVisitor(){
     dept,contactName:null,contactCode:null,purpose:v('v-purpose'),
     shots:[...shots],photo:shots[0]||null,idcard:shots[1]||null,
     timeIn:nowTime(),date:today(),dayKey:dayKey(),status:'กำลังติดต่อ',timeOut:null,approvedBy:null};
-  visitors.push(rec);
-  const ok=await pushNow('visitors',visitors);     // ส่งขึ้นระบบทันทีและรอผล
-  shots=[];formReset=true;render();
+  visitors.unshift(rec);
+  const ok=visTable?await vInsert(rec):await pushNow('visitors',visitors);   // ส่งขึ้นระบบทันทีและรอผล
+  shots=[];formReset=true;save('visitors',visitors);render();
   showSaveResult(rec,ok);
 }
 /* หน้าจอยืนยันเต็มจอหลังบันทึกผู้มาติดต่อ */
@@ -1120,8 +1181,8 @@ function showSaveResult(v,ok){
   </div>`;
 }
 async function reqOut(id){
-  const v=visitors.find(x=>x.id===id);v.status='รออนุมัติออก';render();
-  const ok=await pushNow('visitors',visitors);
+  const v=visitors.find(x=>x.id===id);v.status='รออนุมัติออก';render();save('visitors',visitors);
+  const ok=visTable?await vUpdate(id,{status:'รออนุมัติออก'}):await pushNow('visitors',visitors);
   toast(ok?`ส่งขออนุมัติออกไปยังแผนก${v.dept} แล้ว`:'ส่งขึ้นระบบไม่สำเร็จ — ตรวจอินเทอร์เน็ต',ok?'ok':'err');
 }
 
@@ -1134,7 +1195,9 @@ function pageApprove(){
     ${list.map(v=>`<div class="card" style="padding:18px 20px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap">
         <div style="display:flex;gap:12px">
-          <div onclick="viewVisitor(${v.id})" title="กดเพื่อดูรูปจาก รปภ." style="width:56px;height:68px;border-radius:9px;background:var(--line2);overflow:hidden;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:24px;cursor:pointer">${visitorShots(v)[0]?`<img src="${visitorShots(v)[0]}" style="width:100%;height:100%;object-fit:cover">`:'👤'}</div>
+          <div onclick="viewVisitor(${v.id})" title="กดเพื่อดูรูปจาก รปภ." style="width:56px;height:68px;border-radius:9px;background:var(--line2);overflow:hidden;flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;cursor:pointer">${visitorShots(v)[0]
+            ?`<img src="${visitorShots(v)[0]}" style="width:100%;height:100%;object-fit:cover">`
+            :`<span style="font-size:22px">🖼️</span><span style="font-size:9.5px;color:var(--muted)">ดูรูป</span>`}</div>
           <div><b style="font-size:15px">${esc(v.name)}</b> ${myRole==='emp'?'<span class="badge b-purple">แผนกคุณ</span>':''}<div style="font-size:13px;color:var(--muted);margin-top:3px">${esc(v.company||'-')} · ${esc(v.purpose||'-')}<br>ติดต่อแผนก${esc(v.dept)} · เข้า ${v.timeIn} · ${v.date}${v.approvedBy?' · อนุมัติโดย '+esc(v.approvedBy):''}</div></div>
         </div>
         <span class="badge ${v.status==='รออนุมัติออก'?'b-yellow':'b-blue'}" style="align-self:flex-start">${esc(v.status)}</span>
@@ -1156,8 +1219,10 @@ function pageApprove(){
 async function approveOut(id){
   const v=visitors.find(x=>x.id===id);
   v.status='ออกแล้ว';v.timeOut=nowTime();v.approvedBy=(getUser(session.code)||{}).name||'ผู้ดูแลระบบ';
-  render();
-  const ok=await pushNow('visitors',visitors);   // ส่งขึ้นระบบทันทีและรอผล
+  render();save('visitors',visitors);
+  const ok=visTable
+    ? await vUpdate(id,{status:'ออกแล้ว',time_out:v.timeOut,approved_by:v.approvedBy})
+    : await pushNow('visitors',visitors);   // ส่งขึ้นระบบทันทีและรอผล
   toast(ok?`อนุมัติออกแล้ว — แจ้งจุด รปภ. เรียบร้อย: ${v.name}`
           :`บันทึกในเครื่องแล้ว แต่ส่งขึ้นระบบไม่สำเร็จ — ตรวจอินเทอร์เน็ตแล้วลองใหม่`,ok?'ok':'err');
 }
@@ -1200,9 +1265,15 @@ function repBar(kind){
     ${!vis&&!recTable?'<span style="font-size:12px;color:#A16207">⚠ ยังไม่ได้สร้างตารางประวัติ — แสดงเฉพาะข้อมูลในระบบเดิม</span>':''}
   </div>`;
 }
+let repVisRows=null,repVisLoading=false;
+async function repLoadVis(){
+  repVisLoading=true;render();
+  repVisRows=await vQuery(repFrom,repTo)||[];
+  repVisLoading=false;render();
+}
 function repApplyVis(){
   repFrom=$('rep-from').value||repFrom;repTo=$('rep-to').value||repTo;repQ=$('rep-q').value.trim();
-  repSave();render();
+  repSave();repVisRows=null;render();
 }
 async function delRecord(id){
   if(id==null){toast('รายการนี้ยังไม่ถูกบันทึกลงฐานข้อมูล','err');return}
@@ -1244,10 +1315,15 @@ function reportEmp(){
 }
 function reportVis(){
   repDefaults();
+  // มีตารางแล้ว: ดึงเฉพาะช่วงที่เลือกจากฐานข้อมูล (ไม่รวมรูป จึงเบา)
+  if(visTable&&repVisRows===null&&!repVisLoading){setTimeout(repLoadVis,0);
+    return repBar('vis')+'<div class="card" style="padding:40px;text-align:center;color:var(--faint)">กำลังโหลด...</div>'}
+  if(repVisLoading)return repBar('vis')+'<div class="card" style="padding:40px;text-align:center;color:var(--faint)">กำลังโหลด...</div>';
   const q=repQ.toLowerCase();
-  const rows=visitors.slice().reverse().filter(v=>{
+  const src=visTable?(repVisRows||[]):visitors.slice().reverse();
+  const rows=src.filter(v=>{
     const k=v.dayKey||(v.id>1e12?dayKey(new Date(v.id)):null);   // รายการเก่า: ดึงวันที่จาก id (timestamp)
-    if(k&&(k<repFrom||k>repTo))return false;
+    if(!visTable&&k&&(k<repFrom||k>repTo))return false;
     return !q||[v.name,v.company,v.approvedBy,v.dept,v.purpose,v.phone].join(' ').toLowerCase().includes(q);
   });
   window._visRows=rows;
@@ -1255,7 +1331,9 @@ function reportVis(){
   <div class="card" style="overflow-x:auto"><table>
     <tr><th>วันที่</th><th>รูป</th><th>ชื่อ - นามสกุล</th><th>บริษัท</th><th>แผนกที่ติดต่อ</th><th>วัตถุประสงค์</th><th>เข้า</th><th>ออก</th><th>สถานะ</th></tr>
     ${rows.map(v=>`<tr><td>${esc(v.date)}</td>
-      <td>${visitorShots(v).length?`<img src="${visitorShots(v)[0]}" onclick="viewVisitor(${v.id})" title="กดเพื่อดูรูปขนาดเต็ม" style="width:38px;height:46px;object-fit:cover;border-radius:6px;border:1px solid var(--line);cursor:pointer;display:block">`:'<span style="color:var(--faint);font-size:12px">ไม่มีรูป</span>'}</td>
+      <td>${visitorShots(v).length
+        ?`<img src="${visitorShots(v)[0]}" onclick="viewVisitor(${v.id})" title="กดเพื่อดูรูปขนาดเต็ม" style="width:38px;height:46px;object-fit:cover;border-radius:6px;border:1px solid var(--line);cursor:pointer;display:block">`
+        :`<button class="btn-ghost" style="padding:6px 10px;font-size:12px;min-height:0" onclick="viewVisitor(${v.id})">🖼️ ดูรูป</button>`}</td>
       <td style="font-weight:600">${esc(v.name)}${v.phone?`<div style="font-size:11.5px;color:var(--faint);font-weight:400">${esc(v.phone)}</div>`:''}</td><td>${esc(v.company||'-')}</td>
       <td>${esc(v.dept)}<div style="font-size:11.5px;color:var(--faint)">${v.approvedBy?'อนุมัติโดย '+esc(v.approvedBy):'-'}</div></td><td>${esc(v.purpose||'-')}</td>
       <td>${v.timeIn||'-'}</td><td>${v.timeOut||'-'}</td>
@@ -1264,8 +1342,12 @@ function reportVis(){
 }
 /* ---- ดูรูปจาก รปภ. ---- */
 function closePhoto(){$('photo-view').innerHTML=''}
-function viewVisitor(id){
-  const v=visitors.find(x=>x.id===id);if(!v)return;
+async function viewVisitor(id){
+  const v=(repVisRows||[]).concat(visitors).find(x=>x.id===id);if(!v)return;
+  if(visTable&&!photoCache[id]){                      // โหลดรูปเฉพาะตอนกดดู
+    $('photo-view').innerHTML=`<div style="position:fixed;inset:0;z-index:95;background:rgba(6,14,32,.94);color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px">กำลังโหลดรูป...</div>`;
+    v.shots=await loadPhotos(id);
+  }
   const pane=(src,label)=>src
     ? `<div style="flex:1;min-width:240px"><div style="font-size:12.5px;color:#C3D4EE;margin-bottom:6px">${label}</div><img src="${src}" style="width:100%;border-radius:10px;background:#000;display:block"></div>`
     : `<div style="flex:1;min-width:240px"><div style="font-size:12.5px;color:#C3D4EE;margin-bottom:6px">${label}</div><div style="background:rgba(255,255,255,.08);border-radius:10px;padding:40px;text-align:center;color:#8FA9CE;font-size:13px">ไม่มีรูป</div></div>`;
@@ -1322,7 +1404,7 @@ function exportCsv(kind){
   let head,lines,fname;
   if(kind==='vis'){
     head='วันที่,ชื่อ,บริษัท,แผนกที่ติดต่อ,ผู้อนุมัติออก,วัตถุประสงค์,เวลาเข้า,เวลาออก,สถานะ';
-    lines=visitors.map(v=>[v.date,v.name,v.company||'',v.dept,v.approvedBy||'',v.purpose||'',v.timeIn||'',v.timeOut||'',v.status]);
+    lines=(window._visRows||visitors).map(v=>[v.date,v.name,v.company||'',v.dept,v.approvedBy||'',v.purpose||'',v.timeIn||'',v.timeOut||'',v.status]);
     fname='bwp-visitors.csv';
   }else{
     head='วันที่,รหัสพนักงาน,ชื่อ,แผนก,เวลาออก,เวลากลับเข้า,สถานะ';

@@ -143,6 +143,20 @@ td{padding:11px 14px;border-top:1px solid var(--line2)}
   <div id="mobilenav"></div>
 </div>
 
+<div id="inapp-bar" class="hidden" style="position:fixed;top:0;left:0;right:0;z-index:120;background:#7C2D12;color:#fff;padding:12px 14px;font-size:13.5px;line-height:1.6;box-shadow:0 4px 14px rgba(0,0,0,.3)">
+  <div style="display:flex;gap:10px;align-items:flex-start;max-width:760px;margin:0 auto">
+    <span style="font-size:19px;flex-shrink:0">⚠️</span>
+    <div style="flex-grow:1;min-width:0">
+      <b>กำลังเปิดในแอป <span id="inapp-name">LINE</span> — ถ่ายรูปไม่ได้</b>
+      <div style="opacity:.9;font-size:12.5px;margin-top:2px">เบราว์เซอร์ในแอปไม่รองรับกล้อง กรุณาเปิดในเบราว์เซอร์ปกติ (Chrome / Safari)</div>
+      <div style="display:flex;gap:8px;margin-top:9px;flex-wrap:wrap">
+        <button onclick="openExternal()" style="background:#fff;color:#7C2D12;font-weight:700;padding:10px 16px;font-size:13px;border-radius:8px">↗ เปิดในเบราว์เซอร์</button>
+        <button onclick="copyAppLink()" style="background:rgba(255,255,255,.18);color:#fff;padding:10px 16px;font-size:13px;border-radius:8px">📋 คัดลอกลิงก์</button>
+      </div>
+    </div>
+    <button onclick="$('inapp-bar').classList.add('hidden')" title="ปิด" style="background:none;color:#fff;font-size:18px;padding:0 4px;flex-shrink:0">×</button>
+  </div>
+</div>
 <div id="toast"></div>
 <div id="modal-root"></div>
 <div id="big-result"></div>
@@ -917,9 +931,42 @@ function pageVisitor(){
 let shots=[];   // รูปที่ถ่ายไว้ก่อนกดบันทึก
 /* รูปของผู้มาติดต่อ 1 ราย (รองรับข้อมูลเก่าที่แยก photo/idcard) */
 const visitorShots=v=>(v.shots&&v.shots.length)?v.shots:[v.photo,v.idcard].filter(Boolean);
+/* ---- เบราว์เซอร์ในแอป (LINE / Facebook) เรียกกล้องไม่ได้ — แจ้งให้เปิดเบราว์เซอร์จริง ---- */
+const inAppName=(()=>{const u=navigator.userAgent||'';
+  if(/\bLine\//i.test(u))return 'LINE';
+  if(/FBAN|FBAV|FB_IAB/i.test(u))return 'Facebook';
+  if(/Instagram/i.test(u))return 'Instagram';
+  return null})();
+const appLink=()=>location.origin+location.pathname;
+function openExternal(){
+  const url=appLink();
+  if(inAppName==='LINE'){location.href=url+'?openExternalBrowser=1';return}   // คำสั่งเฉพาะของ LINE
+  // แอปอื่น: ลองส่งต่อให้ระบบเลือกเบราว์เซอร์ (Android) ไม่ได้ผลก็ให้คัดลอกลิงก์แทน
+  if(/android/i.test(navigator.userAgent)){
+    location.href='intent://'+url.replace(/^https?:\/\//,'')+'#Intent;scheme=https;action=android.intent.action.VIEW;end';
+    setTimeout(()=>copyAppLink(),1200);
+  }else copyAppLink();
+}
+async function copyAppLink(){
+  const url=appLink();
+  try{await navigator.clipboard.writeText(url);toast('คัดลอกลิงก์แล้ว — เปิด Chrome/Safari แล้ววาง','ok')}
+  catch(e){prompt('คัดลอกลิงก์นี้ไปเปิดใน Chrome หรือ Safari',url)}
+}
+function showInAppBar(){
+  if(!inAppName)return;
+  $('inapp-name').textContent=inAppName;
+  $('inapp-bar').classList.remove('hidden');
+  document.body.style.paddingTop=$('inapp-bar').offsetHeight+'px';
+}
 /* เปิดตัวเลือกไฟล์ — ล้างค่าเดิมก่อน เพื่อให้ถ่ายรูปเดิมซ้ำแล้วยัง onchange ทำงาน */
 function pickPhoto(id){
   const el=$(id);if(!el)return;
+  if(inAppName&&el.hasAttribute('capture')){   // ในแอป LINE กล้องจะไม่เปิด — บอกทางออกก่อน
+    showInAppBar();
+    toast('เบราว์เซอร์ในแอป '+inAppName+' ถ่ายรูปไม่ได้ — กดปุ่มด้านบนเพื่อเปิดในเบราว์เซอร์','err');
+    window.scrollTo({top:0,behavior:'smooth'});
+    return;
+  }
   el.value='';
   el.click();
 }
@@ -1333,6 +1380,7 @@ function bootSession(){
 // เซสชันหมดอายุ ให้ลบทิ้งก่อนเข้าระบบ
 if(session&&session.at&&Date.now()-session.at>SESSION_MAX_H*3600e3){session=null;persist()}
 try{const m=sessionStorage.getItem('logoutMsg');if(m){sessionStorage.removeItem('logoutMsg');setTimeout(()=>toast(m,'err'),400)}}catch(e){}
+showInAppBar();
 bootSession();
 </script>
 </body>

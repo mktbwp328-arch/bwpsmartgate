@@ -207,17 +207,19 @@ async function recLoadDay(k){   // โหลดรายการของวั
 /* ---- ผู้มาติดต่อ: เก็บเป็นตารางจริง หนึ่งแถวต่อหนึ่งคน ----
    รายการที่ดึงมาแสดง "ไม่รวมรูป" เพื่อให้เบา · รูปโหลดเฉพาะตอนกดดู */
 let visTable=false;
-const VIS_COLS='id,name,company,phone,dept,purpose,visit_date,day_key,time_in,time_out,status,approved_by';
+let visRegBy=false;   // มีคอลัมน์บันทึก รปภ. ผู้ลงทะเบียนแล้วหรือยัง (ต้องรัน SQL เพิ่ม)
+const visCols=()=>'id,name,company,phone,dept,purpose,visit_date,day_key,time_in,time_out,status,approved_by'+(visRegBy?',registered_by,registered_by_code':'');
 const photoCache={};        // {id: [รูป]}
 function toVRow(v){return {id:v.id,name:v.name,company:v.company||null,phone:v.phone||null,dept:v.dept,
   purpose:v.purpose||null,photos:v.shots||[],visit_date:v.date,day_key:v.dayKey||dayKey(),
-  time_in:v.timeIn||null,time_out:v.timeOut||null,status:v.status,approved_by:v.approvedBy||null}}
+  time_in:v.timeIn||null,time_out:v.timeOut||null,status:v.status,approved_by:v.approvedBy||null,
+  ...(visRegBy?{registered_by:v.registeredBy||null,registered_by_code:v.registeredByCode||null}:{})}}
 function fromVRow(x){return {id:Number(x.id),name:x.name,company:x.company||'',phone:x.phone||'',dept:x.dept,
   purpose:x.purpose||'',addr:'',date:x.visit_date,dayKey:x.day_key,timeIn:x.time_in,timeOut:x.time_out,
-  status:x.status,approvedBy:x.approved_by,shots:photoCache[x.id]||(x.photos||undefined)}}
+  status:x.status,approvedBy:x.approved_by,registeredBy:x.registered_by||null,registeredByCode:x.registered_by_code||null,shots:photoCache[x.id]||(x.photos||undefined)}}
 async function vQuery(from,to){
   if(!visTable)return null;
-  try{return (await sbFetch(`smartgate_visitors?select=${VIS_COLS}&day_key=gte.${from}&day_key=lte.${to}&order=id.desc&limit=2000`)).map(fromVRow)}
+  try{return (await sbFetch(`smartgate_visitors?select=${visCols()}&day_key=gte.${from}&day_key=lte.${to}&order=id.desc&limit=2000`)).map(fromVRow)}
   catch(e){console.warn(e);return null}
 }
 async function vInsert(v){
@@ -311,6 +313,7 @@ async function sbLoad(force){
     }else if(m.records)records=m.records;else sbPush('records',records);
     // ผู้มาติดต่อ: ใช้ตารางถ้ามี / ไม่มีก็ใช้ก้อน JSON แบบเดิม
     try{await sbFetch('smartgate_visitors?limit=1');visTable=true}catch(e){visTable=false}
+    if(visTable){try{await sbFetch('smartgate_visitors?select=registered_by&limit=1');visRegBy=true}catch(e){visRegBy=false}}
     if(visTable){
       if(!m.visitors_migrated&&Array.isArray(m.visitors)&&m.visitors.length){   // ย้ายข้อมูลเดิมขึ้นตารางครั้งเดียว
         let n=0;
@@ -838,8 +841,9 @@ function pageEmp(){
 function renderEmpTable(){
   const q=($('emp-search')?.value||'').toLowerCase();
   const list=employees.filter(e=>!q||[e.code,e.name,e.dept,e.pos,e.phone].join(' ').toLowerCase().includes(q));
-  $('emp-table').innerHTML=`<tr><th>รหัส</th><th>ชื่อ - นามสกุล</th><th>แผนก</th><th>ตำแหน่ง</th><th>เบอร์โทร</th><th>PIN</th><th>สถานะ</th><th>จัดการ</th></tr>`+
+  $('emp-table').innerHTML=`<tr><th>รหัส</th><th>ชื่อ - นามสกุล</th><th>แผนก</th><th>ตำแหน่ง</th><th>เบอร์โทร</th><th>สิทธิ์</th><th>PIN</th><th>สถานะ</th><th>จัดการ</th></tr>`+
   list.map((e,i)=>`<tr><td style="color:var(--blue);font-weight:600">${esc(e.code)}</td><td>${esc(e.name)}</td><td>${esc(e.dept)}</td><td>${esc(e.pos)}</td><td>${esc(e.phone)}</td>
+    <td>${getRole(e)==='admin'?'<span class="badge b-blue">ผู้ดูแลระบบ</span>':getRole(e)==='guard'?'<span class="badge b-purple">รปภ.</span>':'<span style="color:var(--faint);font-size:12.5px">พนักงาน</span>'}</td>
     <td>${e.pinHash?'<span class="badge b-green">ตั้งแล้ว</span>':'<span class="badge b-yellow">ยังไม่ตั้ง</span>'}</td>
     <td><span class="badge ${e.active?'b-green':'b-yellow'}" style="cursor:pointer" onclick="toggleEmp('${esc(e.code)}')">${e.active?'Active':'Inactive'}</span></td>
     <td style="white-space:nowrap"><button class="btn-ghost" style="padding:5px 10px" title="แก้ไข" onclick="empModal('${esc(e.code)}')">✏️</button> <button class="btn-ghost" style="padding:5px 10px" title="รีเซ็ตรหัส PIN" onclick="resetPin('${esc(e.code)}')">🔑</button> <button class="btn-ghost" style="padding:5px 10px;color:var(--red)" title="ลบ" onclick="delEmp('${esc(e.code)}')">🗑️</button></td></tr>`).join('');
@@ -1102,7 +1106,7 @@ function pageVisitor(){
       <div style="font-weight:700;margin-bottom:14px">ผู้มาติดต่อวันนี้</div>
       ${newestFirst(visitors).map(v=>`<div style="border:1px solid var(--line);border-radius:11px;padding:12px 14px;margin-bottom:10px;font-size:13.5px">
         <div style="display:flex;justify-content:space-between;gap:8px"><b style="cursor:pointer" onclick="viewVisitor(${v.id})" title="กดเพื่อดูรูป">${visitorShots(v).length?'🖼️ ':''}${esc(v.name)}</b><span class="badge ${v.status==='ออกแล้ว'?'b-green':v.status==='รออนุมัติออก'?'b-yellow':'b-blue'}">${esc(v.status)}</span></div>
-        <div style="color:var(--muted);margin-top:3px">แผนก${esc(v.dept)} · เข้า ${v.timeIn}${v.timeOut?' · ออก '+v.timeOut:''}</div>
+        <div style="color:var(--muted);margin-top:3px">แผนก${esc(v.dept)} · เข้า ${v.timeIn}${v.timeOut?' · ออก '+v.timeOut:''}${v.registeredBy?' · โดย '+esc(v.registeredBy):''}</div>
         ${v.status==='กำลังติดต่อ'?`<button class="btn-ghost" style="margin-top:8px;padding:6px 12px;font-size:12.5px" onclick="reqOut(${v.id})">ผู้มาติดต่อจะกลับ — ส่งขออนุมัติออก</button>`:''}
       </div>`).join('')||'<div style="color:var(--faint);font-size:13.5px">ยังไม่มีผู้มาติดต่อ</div>'}
     </div></div></div>`;
@@ -1203,7 +1207,9 @@ async function saveVisitor(){
   const rec={id:Date.now(),name:v('v-name'),addr:'',company:v('v-company'),phone:v('v-phone'),
     dept,contactName:null,contactCode:null,purpose:v('v-purpose'),
     shots:[...shots],photo:shots[0]||null,idcard:shots[1]||null,
-    timeIn:nowTime(),date:today(),dayKey:dayKey(),status:'กำลังติดต่อ',timeOut:null,approvedBy:null};
+    timeIn:nowTime(),date:today(),dayKey:dayKey(),status:'กำลังติดต่อ',timeOut:null,approvedBy:null,
+    registeredBy:(getUser(session.code)||{}).name||null,       // รปภ. คนที่ลงทะเบียน
+    registeredByCode:session.code};
   visitors.unshift(rec);
   const ok=visTable?await vInsert(rec):await pushNow('visitors',visitors);   // ส่งขึ้นระบบทันทีและรอผล
   shots=[];formReset=true;save('visitors',visitors);render();
@@ -1383,15 +1389,16 @@ function reportVis(){
   window._visRows=rows;
   return repBar('vis')+`<div style="font-size:12.5px;color:var(--muted);margin-bottom:8px">พบ ${rows.length} รายการ</div>
   <div class="card" style="overflow-x:auto"><table>
-    <tr><th>วันที่</th><th>รูป</th><th>ชื่อ - นามสกุล</th><th>บริษัท</th><th>แผนกที่ติดต่อ</th><th>วัตถุประสงค์</th><th>เข้า</th><th>ออก</th><th>สถานะ</th></tr>
+    <tr><th>วันที่</th><th>รูป</th><th>ชื่อ - นามสกุล</th><th>บริษัท</th><th>แผนกที่ติดต่อ</th><th>วัตถุประสงค์</th><th>ลงทะเบียนโดย</th><th>เข้า</th><th>ออก</th><th>สถานะ</th></tr>
     ${rows.map(v=>`<tr><td>${esc(v.date)}</td>
       <td>${visitorShots(v).length
         ?`<img src="${visitorShots(v)[0]}" onclick="viewVisitor(${v.id})" title="กดเพื่อดูรูปขนาดเต็ม" style="width:38px;height:46px;object-fit:cover;border-radius:6px;border:1px solid var(--line);cursor:pointer;display:block">`
         :`<button class="btn-ghost" style="padding:6px 10px;font-size:12px;min-height:0" onclick="viewVisitor(${v.id})">🖼️ ดูรูป</button>`}</td>
       <td style="font-weight:600">${esc(v.name)}${v.phone?`<div style="font-size:11.5px;color:var(--faint);font-weight:400">${esc(v.phone)}</div>`:''}</td><td>${esc(v.company||'-')}</td>
       <td>${esc(v.dept)}<div style="font-size:11.5px;color:var(--faint)">${v.approvedBy?'อนุมัติโดย '+esc(v.approvedBy):'-'}</div></td><td>${esc(v.purpose||'-')}</td>
+      <td>${v.registeredBy?esc(v.registeredBy):'<span style="color:var(--faint)">-</span>'}</td>
       <td>${v.timeIn||'-'}</td><td>${v.timeOut||'-'}</td>
-      <td><span class="badge ${v.status==='ออกแล้ว'?'b-green':v.status==='รออนุมัติออก'?'b-yellow':'b-blue'}">${esc(v.status)}</span></td></tr>`).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--faint);padding:30px">ไม่พบรายการในช่วงที่เลือก</td></tr>'}
+      <td><span class="badge ${v.status==='ออกแล้ว'?'b-green':v.status==='รออนุมัติออก'?'b-yellow':'b-blue'}">${esc(v.status)}</span></td></tr>`).join('')||'<tr><td colspan="10" style="text-align:center;color:var(--faint);padding:30px">ไม่พบรายการในช่วงที่เลือก</td></tr>'}
   </table></div>`;
 }
 /* ---- ดูรูปจาก รปภ. ---- */
@@ -1413,6 +1420,7 @@ async function viewVisitor(id){
           <div style="font-size:20px;font-weight:700">${esc(v.name)}</div>
           <div style="font-size:13px;color:#C3D4EE;margin-top:3px">${esc(v.company||'-')}${v.phone?' · '+esc(v.phone):''}</div>
           <div style="font-size:13px;color:#C3D4EE">ติดต่อแผนก${esc(v.dept)} · ${esc(v.date)} เข้า ${v.timeIn||'-'}${v.timeOut?' · ออก '+v.timeOut:''}</div>
+          ${v.registeredBy||v.approvedBy?`<div style="font-size:12.5px;color:#9DB8E0;margin-top:2px">${v.registeredBy?'💂 ลงทะเบียนโดย '+esc(v.registeredBy):''}${v.registeredBy&&v.approvedBy?' · ':''}${v.approvedBy?'✅ อนุมัติออกโดย '+esc(v.approvedBy):''}</div>`:''}
           ${v.addr?`<div style="font-size:12.5px;color:#9DB8E0;margin-top:4px;max-width:560px">🏠 ${esc(v.addr)}</div>`:''}
         </div>
         <button onclick="closePhoto()" style="background:rgba(255,255,255,.14);color:#fff;padding:10px 18px;border-radius:9px;font-size:14px;flex-shrink:0">✕ ปิด</button>
@@ -1457,8 +1465,8 @@ function reportExport(){
 function exportCsv(kind){
   let head,lines,fname;
   if(kind==='vis'){
-    head='วันที่,ชื่อ,บริษัท,แผนกที่ติดต่อ,ผู้อนุมัติออก,วัตถุประสงค์,เวลาเข้า,เวลาออก,สถานะ';
-    lines=(window._visRows||visitors).map(v=>[v.date,v.name,v.company||'',v.dept,v.approvedBy||'',v.purpose||'',v.timeIn||'',v.timeOut||'',v.status]);
+    head='วันที่,ชื่อ,บริษัท,แผนกที่ติดต่อ,ผู้อนุมัติออก,วัตถุประสงค์,ลงทะเบียนโดย,เวลาเข้า,เวลาออก,สถานะ';
+    lines=(window._visRows||visitors).map(v=>[v.date,v.name,v.company||'',v.dept,v.approvedBy||'',v.purpose||'',v.registeredBy||'',v.timeIn||'',v.timeOut||'',v.status]);
     fname='bwp-visitors.csv';
   }else{
     head='วันที่,รหัสพนักงาน,ชื่อ,แผนก,เวลาออก,เวลากลับเข้า,สถานะ';
@@ -1504,6 +1512,8 @@ function pageSettings(){
     </div>
   </div>
 
+  ${accountsCard()}
+
   <div class="card" style="padding:22px;max-width:640px;margin-top:16px">
     <div style="font-weight:700;margin-bottom:6px">👥 แผนกและผู้อนุมัติผู้มาติดต่อ</div>
     <div style="font-size:12.5px;color:var(--muted);margin-bottom:16px">รปภ. จะเห็นเฉพาะแผนกในรายการนี้ · เฉพาะคนที่กำหนดไว้เท่านั้นที่เห็นคำขอและกดอนุมัติออกได้</div>
@@ -1532,6 +1542,51 @@ function pageSettings(){
       <button class="btn-green" style="white-space:nowrap" onclick="addDept()">＋ เพิ่มแผนก</button>
     </div>
   </div></div>`;
+}
+/* ---- บัญชีผู้ใช้และรหัสกลาง ---- */
+function accountsCard(){
+  const admins=employees.filter(e=>e.active&&getRole(e)==='admin');
+  const guards=employees.filter(e=>e.active&&getRole(e)==='guard');
+  const on=sharedLoginOn();
+  const chip=(e,c)=>`<span style="display:inline-flex;align-items:center;gap:5px;background:${c};border-radius:999px;padding:4px 11px;font-size:12.5px">${esc(e.name)}${e.pinHash?'':' <span style="color:#A16207;font-size:11px">(ยังไม่ตั้ง PIN)</span>'}</span>`;
+  return `<div class="card" style="padding:22px;max-width:640px;margin-top:16px">
+    <div style="font-weight:700;margin-bottom:6px">🔐 บัญชีผู้ใช้และรหัสกลาง</div>
+    <div style="font-size:12.5px;color:var(--muted);margin-bottom:14px">กำหนดสิทธิ์รายคนได้ที่หน้า <b>ข้อมูลพนักงาน</b> → ✏️ → ช่อง "สิทธิ์การใช้งาน"</div>
+
+    <div style="font-size:13px;font-weight:600;margin-bottom:6px">🛠️ ผู้ดูแลระบบ (${admins.length} คน)</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">${admins.map(e=>chip(e,'#DBEAFE')).join('')||'<span style="font-size:12.5px;color:var(--red)">⚠ ยังไม่มี — ต้องกำหนดอย่างน้อย 1 คนก่อนปิดรหัสกลาง</span>'}</div>
+
+    <div style="font-size:13px;font-weight:600;margin-bottom:6px">💂 รปภ. (${guards.length} คน)</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px">${guards.map(e=>chip(e,'#EDE9FE')).join('')||'<span style="font-size:12.5px;color:var(--red)">⚠ ยังไม่มี — เพิ่ม รปภ. แต่ละคนเป็นพนักงานก่อนปิดรหัสกลาง</span>'}</div>
+
+    <div style="border:1.5px solid ${on?'#FDBA74':'#86EFAC'};background:${on?'#FFF7ED':'#F0FDF4'};border-radius:11px;padding:14px 16px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+        <div style="min-width:0">
+          <div style="font-weight:700;font-size:14px;color:${on?'#9A3412':'#15803D'}">${on?'⚠️ รหัสกลางเปิดใช้งานอยู่':'✓ ปิดรหัสกลางแล้ว'}</div>
+          <div style="font-size:12.5px;color:var(--muted);margin-top:2px">${on
+            ?'ใครที่รู้รหัส bwpsecurity / bwphradmin เข้าระบบได้ทันที รวมถึงคนที่ลาออกไปแล้ว'
+            :'ทุกคนต้องเข้าด้วยเบอร์โทร + PIN ของตัวเอง · ลาออกแล้วตั้ง Inactive ได้เลย'}</div>
+        </div>
+        <button class="${on?'btn-blue':'btn-ghost'}" style="white-space:nowrap" onclick="toggleSharedLogin()">${on?'ปิดรหัสกลาง':'เปิดรหัสกลางอีกครั้ง'}</button>
+      </div>
+    </div>
+  </div>`;
+}
+function toggleSharedLogin(){
+  const turnOff=sharedLoginOn();
+  if(turnOff){
+    const admins=employees.filter(e=>e.active&&getRole(e)==='admin');
+    const guards=employees.filter(e=>e.active&&getRole(e)==='guard');
+    // กันล็อกตัวเองออก: ต้องมีแอดมินที่ตั้ง PIN แล้วอย่างน้อย 1 คน
+    if(!admins.length){toast('ต้องกำหนดผู้ดูแลระบบอย่างน้อย 1 คนก่อน','err');return}
+    if(!admins.some(e=>e.pinHash)){toast('ผู้ดูแลระบบยังไม่มีใครตั้ง PIN — ให้เข้าระบบด้วยเบอร์ของตัวเองก่อน 1 ครั้ง','err');return}
+    if(!guards.length&&!confirm('ยังไม่มีบัญชี รปภ. เลย — ถ้าปิดตอนนี้ รปภ. จะเข้าระบบไม่ได้\n\nยืนยันจะปิดหรือไม่?'))return;
+    if(!confirm('ปิดรหัสกลาง bwpsecurity และ bwphradmin?\n\n• ทุกเครื่องที่เข้าด้วยรหัสกลางจะถูกออกจากระบบทันที\n• ต่อไปทุกคนต้องเข้าด้วยเบอร์โทร + PIN ของตัวเอง'))return;
+  }
+  settings.sharedLogin=!turnOff;
+  persist();render();
+  toast(turnOff?'ปิดรหัสกลางแล้ว — เครื่องที่ใช้รหัสกลางจะถูกออกในไม่กี่วินาที':'เปิดรหัสกลางอีกครั้งแล้ว',turnOff?'ok':'err');
+  if(turnOff&&(session.code==='ADMIN'||session.code==='SEC001'))setTimeout(()=>doLogout('ปิดรหัสกลางแล้ว — เข้าใหม่ด้วยเบอร์โทรและ PIN ของคุณ'),1800);
 }
 /* ---- จัดการแผนกและผู้อนุมัติ ---- */
 function addDept(){

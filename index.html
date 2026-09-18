@@ -373,20 +373,20 @@ addEventListener('focus',()=>{if(sbOnline)sbLoad()});
 
 let employees=load('employees',[]);
 /* บทบาท: admin = เมนูเต็ม / guard = จุด รปภ. / emp = พนักงานทั่วไป */
+/* สิทธิ์การใช้งาน
+   - ผู้ดูแลระบบ: เข้าด้วยรหัส bwphradmin
+   - รปภ.: พนักงานที่อยู่แผนก "รักษาความปลอดภัย" (เข้าด้วยเบอร์ + PIN ของตัวเอง)
+   - พนักงาน: ทุกคนที่เหลือ */
+const GUARD_DEPT=/รักษาความปลอดภัย|^\s*รปภ\.?\s*$/;
 function getRole(e){
   if(!e)return 'emp';
-  if(e.code==='ADMIN')return 'admin';    // รหัสกลาง bwphradmin
-  if(e.code==='SEC001')return 'guard';   // รหัสกลาง bwpsecurity
-  if(e.role==='admin'||e.role==='guard'||e.role==='emp')return e.role;   // กำหนดสิทธิ์รายคนในหน้าข้อมูลพนักงาน
-  if(/รปภ|รักษาความปลอดภัย/.test((e.dept||'')+(e.pos||'')))return 'guard';   // เดิม: ดูจากแผนก
+  if(e.code==='ADMIN')return 'admin';
+  if(GUARD_DEPT.test(e.dept||''))return 'guard';
   return 'emp';
 }
 const ROLE_LABEL={emp:'พนักงาน',guard:'รปภ.',admin:'ผู้ดูแลระบบ'};
-/* รหัสกลาง (bwpsecurity / bwphradmin) เปิดใช้ได้ไหม — ปิดได้ในหน้าตั้งค่า */
-const sharedLoginOn=()=>settings.sharedLogin!==false;
 function getUser(code){
   if(code==='ADMIN')return {code:'ADMIN',name:'ผู้ดูแลระบบ',dept:'BWP HR Admin',pos:'',phone:'',active:true};
-  if(code==='SEC001'&&!employees.some(e=>e.code==='SEC001'))return {code:'SEC001',name:'จุดตรวจ รปภ.',dept:'รักษาความปลอดภัย',pos:'รปภ.',phone:'',active:true};
   return employees.find(e=>e.code===code);
 }
 let records=load('records',[]);   // {type:'emp', code, name, dept, in, out, date}
@@ -456,13 +456,13 @@ function backToPhone(){
 $('btn-back').onclick=backToPhone;
 $('btn-next').onclick=()=>{
   const kw=$('login-phone').value.trim().toLowerCase();
-  if(kw==='bwphradmin'||kw==='bwpsecurity'){
-    if(!sharedLoginOn()){
-      loginErr('<b>✕ รหัสกลางถูกปิดใช้งานแล้ว</b><br>กรุณาเข้าด้วยเบอร์โทรและ PIN ของตัวเอง — ถ้ายังไม่มีบัญชีให้ติดต่อฝ่ายบุคคล');
-      return;
-    }
-    startSession(kw==='bwphradmin'?'ADMIN':'SEC001');
-    toast(kw==='bwphradmin'?'เข้าสู่ระบบผู้ดูแล (Admin)':'เข้าสู่ระบบจุด รปภ.','ok');return;
+  if(kw==='bwphradmin'){
+    startSession('ADMIN');
+    toast('เข้าสู่ระบบผู้ดูแล (Admin)','ok');return;
+  }
+  if(kw==='bwpsecurity'){   // รหัสเดิมของ รปภ. ยกเลิกแล้ว — บอกทางไปต่อ
+    loginErr('<b>✕ ยกเลิกรหัส bwpsecurity แล้ว</b><br>รปภ. กรุณาเข้าด้วย<b>เบอร์โทรของตัวเอง</b> — ถ้ายังไม่มีบัญชี ให้ฝ่ายบุคคลเพิ่มชื่อคุณในแผนก "รักษาความปลอดภัย"');
+    return;
   }
   const p=normPhone($('login-phone').value);
   const box=$('login-error');box.classList.add('hidden');
@@ -543,9 +543,9 @@ function sessionMaxMs(s){return s&&s.remember?REMEMBER_DAYS*864e5:SESSION_MAX_H*
 /* ตรวจทุกครั้งที่ซิงก์ว่าคนที่ล็อกอินอยู่ยังมีสิทธิ์ไหม — ลาออก/ระงับแล้วเตะออกทันที แม้เครื่องจะจดจำไว้ */
 function checkStillAllowed(){
   if(!session)return false;
-  if(session.code==='ADMIN'||session.code==='SEC001'){
-    if(!sharedLoginOn()){doLogout('รหัสกลางถูกปิดใช้งานแล้ว — กรุณาเข้าด้วยเบอร์โทรและ PIN ของตัวเอง');return true}
-    return false;
+  if(session.code==='ADMIN')return false;
+  if(session.code==='SEC001'){   // เครื่องที่เคยเข้าด้วยรหัส bwpsecurity ซึ่งยกเลิกแล้ว
+    doLogout('ยกเลิกการเข้าด้วยรหัส bwpsecurity แล้ว — รปภ. กรุณาเข้าด้วยเบอร์โทรและ PIN ของตัวเอง');return true;
   }
   const e=employees.find(x=>x.code===session.code);
   if(!e){doLogout('บัญชีของคุณถูกลบออกจากระบบแล้ว — ติดต่อฝ่ายบุคคล');return true}
@@ -863,14 +863,11 @@ function empModal(code){
     <div style="font-size:17px;font-weight:700;margin-bottom:16px">${code?'แก้ไข':'เพิ่ม'}พนักงาน</div>
     <div class="field"><label>รหัสพนักงาน *</label><input id="f-code" value="${esc(e.code)}" ${code?'readonly':''}></div>
     <div class="field"><label>ชื่อ-นามสกุล *</label><input id="f-name" value="${esc(e.name)}"></div>
-    <div class="grid2"><div class="field"><label>แผนก</label><input id="f-dept" value="${esc(e.dept)}"></div>
+    <div class="grid2"><div class="field"><label>แผนก</label><input id="f-dept" value="${esc(e.dept)}" list="dept-options" oninput="$('f-role-hint').innerHTML=roleHint(this.value)"></div>
     <div class="field"><label>ตำแหน่ง</label><input id="f-pos" value="${esc(e.pos)}"></div></div>
+    <datalist id="dept-options">${[...new Set(['รักษาความปลอดภัย',...employees.map(x=>x.dept).filter(Boolean)])].map(d=>`<option value="${esc(d)}">`).join('')}</datalist>
+    <div id="f-role-hint" style="margin:-6px 0 12px">${roleHint(e.dept)}</div>
     <div class="field"><label>เบอร์โทร * <span style="font-weight:400;color:var(--faint)">(ใช้เข้าสู่ระบบ ห้ามซ้ำกับคนอื่น)</span></label><input id="f-phone" value="${esc(e.phone)}" inputmode="tel"></div>
-    <div class="field"><label>สิทธิ์การใช้งาน</label>
-      <select id="f-role">
-        ${['emp','guard','admin'].map(r=>`<option value="${r}" ${getRole(e)===r?'selected':''}>${ROLE_LABEL[r]}${r==='emp'?' — สแกนเข้า-ออก อนุมัติผู้มาติดต่อ':r==='guard'?' — ลงทะเบียนผู้มาติดต่อ':' — เข้าได้ทุกเมนู'}</option>`).join('')}
-      </select>
-    </div>
     ${code?`<div style="font-size:12.5px;color:var(--muted);margin:-4px 0 12px">สถานะตอนนี้: <b style="color:${e.active?'var(--green)':'var(--red)'}">${e.active?'Active':'Inactive (เข้าระบบไม่ได้)'}</b> — เปลี่ยนได้ที่ป้ายสถานะในตาราง</div>`:''}
     <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:6px"><button class="btn-ghost" onclick="closeModal()">ยกเลิก</button><button class="btn-blue" onclick="saveEmp('${esc(code||'')}')">บันทึก</button></div>
   </div></div>`;
@@ -883,17 +880,20 @@ function saveEmp(code){
   // เบอร์โทรใช้เข้าสู่ระบบ ซ้ำกันไม่ได้ ไม่งั้นระบบจะเลือกคนผิด
   const dup=employees.find(e=>e.code!==(code||v('f-code'))&&normPhone(e.phone)===normPhone(v('f-phone')));
   if(dup){toast('เบอร์นี้ใช้อยู่แล้วโดย '+dup.name+' ('+dup.code+')','err');return}
-  const role=$('f-role').value;
-  const data={code:v('f-code'),name:v('f-name'),dept:v('f-dept'),pos:v('f-pos'),phone:v('f-phone'),role};
+  const data={code:v('f-code'),name:v('f-name'),dept:v('f-dept'),pos:v('f-pos'),phone:v('f-phone')};
   if(code){
     const e=employees.find(x=>x.code===code);
-    // กันไม่ให้ลดสิทธิ์แอดมินคนสุดท้าย แล้วไม่เหลือใครเข้าหน้าแอดมินได้
-    if(getRole(e)==='admin'&&role!=='admin'&&!sharedLoginOn()&&employees.filter(x=>x.active&&getRole(x)==='admin').length<=1)
-      {toast('ต้องมีผู้ดูแลระบบอย่างน้อย 1 คน','err');return}
     Object.assign(e,data);                   // คงสถานะ Active/Inactive และ PIN เดิมไว้
+    delete e.role;                           // สิทธิ์ดูจากแผนกอย่างเดียว
   }else employees.push({...data,active:true});
   persist();closeModal();renderEmpTable();
-  toast(code?'บันทึกการแก้ไขแล้ว':'เพิ่มพนักงานแล้ว — สิทธิ์: '+ROLE_LABEL[role],'ok');
+  toast((code?'บันทึกการแก้ไขแล้ว':'เพิ่มพนักงานแล้ว')+' — สิทธิ์: '+ROLE_LABEL[getRole(data)],'ok');
+}
+/* บอกในฟอร์มว่าแผนกนี้ได้สิทธิ์อะไร */
+function roleHint(dept){
+  return getRole({dept})==='guard'
+    ?'<span class="badge b-purple">💂 ได้ระบบ รปภ.</span> <span style="font-size:12px;color:var(--muted)">ลงทะเบียนผู้มาติดต่อ · เข้าด้วยเบอร์ + PIN ของตัวเอง</span>'
+    :'<span style="font-size:12px;color:var(--faint)">ได้ระบบพนักงาน · ถ้าเป็น รปภ. ให้ใส่แผนก "รักษาความปลอดภัย"</span>';
 }
 function importCsv(inp){
   const f=inp.files[0];if(!f)return;
@@ -1512,8 +1512,6 @@ function pageSettings(){
     </div>
   </div>
 
-  ${accountsCard()}
-
   <div class="card" style="padding:22px;max-width:640px;margin-top:16px">
     <div style="font-weight:700;margin-bottom:6px">👥 แผนกและผู้อนุมัติผู้มาติดต่อ</div>
     <div style="font-size:12.5px;color:var(--muted);margin-bottom:16px">รปภ. จะเห็นเฉพาะแผนกในรายการนี้ · เฉพาะคนที่กำหนดไว้เท่านั้นที่เห็นคำขอและกดอนุมัติออกได้</div>
@@ -1542,51 +1540,6 @@ function pageSettings(){
       <button class="btn-green" style="white-space:nowrap" onclick="addDept()">＋ เพิ่มแผนก</button>
     </div>
   </div></div>`;
-}
-/* ---- บัญชีผู้ใช้และรหัสกลาง ---- */
-function accountsCard(){
-  const admins=employees.filter(e=>e.active&&getRole(e)==='admin');
-  const guards=employees.filter(e=>e.active&&getRole(e)==='guard');
-  const on=sharedLoginOn();
-  const chip=(e,c)=>`<span style="display:inline-flex;align-items:center;gap:5px;background:${c};border-radius:999px;padding:4px 11px;font-size:12.5px">${esc(e.name)}${e.pinHash?'':' <span style="color:#A16207;font-size:11px">(ยังไม่ตั้ง PIN)</span>'}</span>`;
-  return `<div class="card" style="padding:22px;max-width:640px;margin-top:16px">
-    <div style="font-weight:700;margin-bottom:6px">🔐 บัญชีผู้ใช้และรหัสกลาง</div>
-    <div style="font-size:12.5px;color:var(--muted);margin-bottom:14px">กำหนดสิทธิ์รายคนได้ที่หน้า <b>ข้อมูลพนักงาน</b> → ✏️ → ช่อง "สิทธิ์การใช้งาน"</div>
-
-    <div style="font-size:13px;font-weight:600;margin-bottom:6px">🛠️ ผู้ดูแลระบบ (${admins.length} คน)</div>
-    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px">${admins.map(e=>chip(e,'#DBEAFE')).join('')||'<span style="font-size:12.5px;color:var(--red)">⚠ ยังไม่มี — ต้องกำหนดอย่างน้อย 1 คนก่อนปิดรหัสกลาง</span>'}</div>
-
-    <div style="font-size:13px;font-weight:600;margin-bottom:6px">💂 รปภ. (${guards.length} คน)</div>
-    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px">${guards.map(e=>chip(e,'#EDE9FE')).join('')||'<span style="font-size:12.5px;color:var(--red)">⚠ ยังไม่มี — เพิ่ม รปภ. แต่ละคนเป็นพนักงานก่อนปิดรหัสกลาง</span>'}</div>
-
-    <div style="border:1.5px solid ${on?'#FDBA74':'#86EFAC'};background:${on?'#FFF7ED':'#F0FDF4'};border-radius:11px;padding:14px 16px">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-        <div style="min-width:0">
-          <div style="font-weight:700;font-size:14px;color:${on?'#9A3412':'#15803D'}">${on?'⚠️ รหัสกลางเปิดใช้งานอยู่':'✓ ปิดรหัสกลางแล้ว'}</div>
-          <div style="font-size:12.5px;color:var(--muted);margin-top:2px">${on
-            ?'ใครที่รู้รหัส bwpsecurity / bwphradmin เข้าระบบได้ทันที รวมถึงคนที่ลาออกไปแล้ว'
-            :'ทุกคนต้องเข้าด้วยเบอร์โทร + PIN ของตัวเอง · ลาออกแล้วตั้ง Inactive ได้เลย'}</div>
-        </div>
-        <button class="${on?'btn-blue':'btn-ghost'}" style="white-space:nowrap" onclick="toggleSharedLogin()">${on?'ปิดรหัสกลาง':'เปิดรหัสกลางอีกครั้ง'}</button>
-      </div>
-    </div>
-  </div>`;
-}
-function toggleSharedLogin(){
-  const turnOff=sharedLoginOn();
-  if(turnOff){
-    const admins=employees.filter(e=>e.active&&getRole(e)==='admin');
-    const guards=employees.filter(e=>e.active&&getRole(e)==='guard');
-    // กันล็อกตัวเองออก: ต้องมีแอดมินที่ตั้ง PIN แล้วอย่างน้อย 1 คน
-    if(!admins.length){toast('ต้องกำหนดผู้ดูแลระบบอย่างน้อย 1 คนก่อน','err');return}
-    if(!admins.some(e=>e.pinHash)){toast('ผู้ดูแลระบบยังไม่มีใครตั้ง PIN — ให้เข้าระบบด้วยเบอร์ของตัวเองก่อน 1 ครั้ง','err');return}
-    if(!guards.length&&!confirm('ยังไม่มีบัญชี รปภ. เลย — ถ้าปิดตอนนี้ รปภ. จะเข้าระบบไม่ได้\n\nยืนยันจะปิดหรือไม่?'))return;
-    if(!confirm('ปิดรหัสกลาง bwpsecurity และ bwphradmin?\n\n• ทุกเครื่องที่เข้าด้วยรหัสกลางจะถูกออกจากระบบทันที\n• ต่อไปทุกคนต้องเข้าด้วยเบอร์โทร + PIN ของตัวเอง'))return;
-  }
-  settings.sharedLogin=!turnOff;
-  persist();render();
-  toast(turnOff?'ปิดรหัสกลางแล้ว — เครื่องที่ใช้รหัสกลางจะถูกออกในไม่กี่วินาที':'เปิดรหัสกลางอีกครั้งแล้ว',turnOff?'ok':'err');
-  if(turnOff&&(session.code==='ADMIN'||session.code==='SEC001'))setTimeout(()=>doLogout('ปิดรหัสกลางแล้ว — เข้าใหม่ด้วยเบอร์โทรและ PIN ของคุณ'),1800);
 }
 /* ---- จัดการแผนกและผู้อนุมัติ ---- */
 function addDept(){
@@ -1666,7 +1619,7 @@ function bootSession(){
   // เปิดแอปมาแล้วพบว่าบัญชีถูกระงับ/ลบ หรือรหัสกลางถูกปิด (ตามข้อมูลล่าสุดในเครื่อง) — ไม่ต้องเข้า
   if(session){
     const u=getUser(session.code);
-    const blocked=!u||(u.active===false)||((session.code==='ADMIN'||session.code==='SEC001')&&!sharedLoginOn());
+    const blocked=!u||(u.active===false)||session.code==='SEC001';   // SEC001 = รหัส bwpsecurity เดิม
     if(blocked){session=null;persist();return false}
   }
   if(session&&getUser(session.code)){

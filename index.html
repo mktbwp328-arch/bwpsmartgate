@@ -98,6 +98,10 @@ td{padding:11px 14px;border-top:1px solid var(--line2)}
       <div style="font-size:23px;font-weight:700">เข้าสู่ระบบ</div>
       <div style="font-size:13.5px;color:var(--muted);margin:4px 0 20px">ล็อกอินด้วยเบอร์โทรที่ผูกกับข้อมูลพนักงาน</div>
       <div class="field"><label>เบอร์โทรศัพท์</label><input id="login-phone" placeholder="เช่น 081-345-6789" inputmode="tel"></div>
+      <label style="display:flex;align-items:center;gap:9px;font-weight:400;cursor:pointer;margin:-4px 0 14px;font-size:13.5px;color:#334155">
+        <input type="checkbox" id="login-remember" checked style="width:18px;height:18px;margin:0;accent-color:var(--blue)">
+        <span>จดจำการเข้าระบบในเครื่องนี้ <span style="color:var(--faint);font-size:12px">(ไม่ต้องกรอกรหัสอีก)</span></span>
+      </label>
       <div id="login-error" class="hidden" style="background:#FEE2E2;border:1px solid #FCA5A5;border-radius:10px;padding:11px 14px;color:#B91C1C;font-size:13px;margin-bottom:13px;line-height:1.55"></div>
       <div id="pin-box" class="hidden">
         <div id="pin-who" style="background:#EFF5FF;border:1px solid #BFDBFE;border-radius:10px;padding:10px 13px;font-size:13px;color:#1E40AF;margin-bottom:13px"></div>
@@ -444,11 +448,11 @@ $('btn-back').onclick=backToPhone;
 $('btn-next').onclick=()=>{
   const kw=$('login-phone').value.trim().toLowerCase();
   if(kw==='bwphradmin'){
-    session={code:'ADMIN',at:Date.now()};persist();enterApp();
+    startSession('ADMIN');
     toast('เข้าสู่ระบบผู้ดูแล (Admin)','ok');return;
   }
   if(kw==='bwpsecurity'){
-    session={code:'SEC001',at:Date.now()};persist();enterApp();
+    startSession('SEC001');
     toast('เข้าสู่ระบบจุด รปภ.','ok');return;
   }
   const p=normPhone($('login-phone').value);
@@ -486,7 +490,7 @@ $('btn-login').onclick=async()=>{
     if(/^(\d)\1{5}$/.test(pin)||['123456','654321','012345'].includes(pin)){loginErr('รหัส PIN คาดเดาง่ายเกินไป — เลือกเลขอื่น');return}
     const emp=employees.find(e=>e.code===pendingEmp.code);
     emp.pinHash=await hashPin(emp.code,pin);
-    session={code:emp.code,at:Date.now()};persist();enterApp();
+    startSession(emp.code);
     toast('ตั้งรหัส PIN เรียบร้อย — ครั้งต่อไปใช้รหัสนี้เข้าระบบ','ok');return;
   }
   const lock=lockState(pendingEmp.code);
@@ -501,7 +505,7 @@ $('btn-login').onclick=async()=>{
     $('login-pin').value='';$('login-pin').focus();return;
   }
   saveLock(pendingEmp.code,{n:0,until:0});
-  session={code:pendingEmp.code,at:Date.now()};persist();enterApp();
+  startSession(pendingEmp.code);
 };
 /* ล็อกเก็บใน localStorage — รีเฟรชหน้าแล้วไม่รีเซ็ตจำนวนครั้งที่ผิด */
 function lockState(code){try{return JSON.parse(localStorage.getItem(LS+'lock.'+code))||{n:0,until:0}}catch(e){return {n:0,until:0}}}
@@ -516,14 +520,25 @@ function doLogout(msg){
   location.replace(location.pathname); // ล้าง ?as= ออกด้วย ไม่งั้นเข้าซ้ำอัตโนมัติ
 }
 /* ---- หมดอายุการเข้าใช้งาน: กันเครื่องส่วนกลาง (จุด รปภ. / มือถือที่วางทิ้งไว้) ---- */
-const SESSION_MAX_H=12;        // เข้าระบบได้นานสุด 12 ชั่วโมง
-const IDLE_LOGOUT_MIN=30;      // ไม่มีการใช้งาน 30 นาที ออกอัตโนมัติ
+const SESSION_MAX_H=12;        // ไม่ได้เลือกจดจำ: เข้าระบบได้นานสุด 12 ชั่วโมง
+const IDLE_LOGOUT_MIN=30;      // ไม่ได้เลือกจดจำ: ไม่มีการใช้งาน 30 นาที ออกอัตโนมัติ
+const REMEMBER_DAYS=90;        // เลือกจดจำ: อยู่ในระบบได้ 90 วัน ไม่ต้องกรอกรหัสอีก
+/* เริ่มเซสชัน — ใช้ร่วมกันทุกช่องทางเข้าระบบ */
+function startSession(code){
+  const remember=$('login-remember')?$('login-remember').checked:true;
+  session={code,at:Date.now(),remember};
+  if(remember)save('lastPhone',$('login-phone')?.value.trim()||'');   // เติมเบอร์ให้ครั้งหน้า
+  persist();enterApp();
+}
+function sessionMaxMs(s){return s&&s.remember?REMEMBER_DAYS*864e5:SESSION_MAX_H*3600e3}
 let lastAct=Date.now();
 ['click','keydown','touchstart','scroll'].forEach(e=>addEventListener(e,()=>{lastAct=Date.now()},{passive:true}));
 setInterval(()=>{
   if(!session||$('app').classList.contains('hidden'))return;
-  if(session.at&&Date.now()-session.at>SESSION_MAX_H*3600e3)return doLogout('เข้าระบบครบ '+SESSION_MAX_H+' ชั่วโมงแล้ว กรุณาเข้าสู่ระบบใหม่');
-  if(Date.now()-lastAct>IDLE_LOGOUT_MIN*60000)return doLogout('ไม่มีการใช้งาน '+IDLE_LOGOUT_MIN+' นาที ระบบออกให้อัตโนมัติ');
+  if(session.at&&Date.now()-session.at>sessionMaxMs(session))
+    return doLogout(session.remember?'เข้าระบบครบ '+REMEMBER_DAYS+' วันแล้ว กรุณาเข้าสู่ระบบใหม่':'เข้าระบบครบ '+SESSION_MAX_H+' ชั่วโมงแล้ว กรุณาเข้าสู่ระบบใหม่');
+  if(!session.remember&&Date.now()-lastAct>IDLE_LOGOUT_MIN*60000)   // จดจำไว้แล้วไม่ต้องออกเมื่อว่าง
+    return doLogout('ไม่มีการใช้งาน '+IDLE_LOGOUT_MIN+' นาที ระบบออกให้อัตโนมัติ');
 },60000);
 
 /* ================= NAV / PAGES ================= */
@@ -1564,7 +1579,9 @@ function bootSession(){
   return false;
 }
 // เซสชันหมดอายุ ให้ลบทิ้งก่อนเข้าระบบ
-if(session&&session.at&&Date.now()-session.at>SESSION_MAX_H*3600e3){session=null;persist()}
+if(session&&session.at&&Date.now()-session.at>sessionMaxMs(session)){session=null;persist()}
+// เคยเข้าระบบแบบจดจำไว้ เติมเบอร์ให้อัตโนมัติ
+try{const lp=load('lastPhone','');if(lp&&$('login-phone')&&!$('login-phone').value)$('login-phone').value=lp}catch(e){}
 try{const m=sessionStorage.getItem('logoutMsg');if(m){sessionStorage.removeItem('logoutMsg');setTimeout(()=>toast(m,'err'),400)}}catch(e){}
 showInAppBar();
 bootSession();

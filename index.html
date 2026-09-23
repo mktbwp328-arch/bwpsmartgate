@@ -1183,15 +1183,20 @@ function pickPhoto(id){
   el.value='';
   el.click();
 }
-function shrink(dataUrl,maxW,q){   // ย่อรูปก่อนเก็บ (พื้นที่จำกัด)
+/* ย่อรูปก่อนเก็บ — จำกัด "ด้านที่ยาวที่สุด" (เดิมจำกัดแค่ความกว้าง รูปแนวตั้งจากมือถือ
+   จึงสูงมากและไฟล์ใหญ่เกินจำเป็น) และใช้ WebP ซึ่งเล็กกว่า JPEG ราวครึ่งหนึ่ง */
+const canWebp=(()=>{try{return document.createElement('canvas').toDataURL('image/webp').startsWith('data:image/webp')}catch(e){return false}})();
+function shrink(dataUrl,maxSide,q){
   return new Promise(res=>{
     const img=new Image();
     img.onload=()=>{
-      const s=Math.min(1,maxW/img.width);
+      const s=Math.min(1,maxSide/Math.max(img.width,img.height));
       const c=document.createElement('canvas');
       c.width=Math.round(img.width*s);c.height=Math.round(img.height*s);
-      c.getContext('2d').drawImage(img,0,0,c.width,c.height);
-      res(c.toDataURL('image/jpeg',q));
+      const x=c.getContext('2d');x.imageSmoothingQuality='high';
+      x.drawImage(img,0,0,c.width,c.height);
+      const out=canWebp?c.toDataURL('image/webp',q):c.toDataURL('image/jpeg',Math.min(0.72,q+0.05));
+      res(out.length<dataUrl.length?out:dataUrl);   // ถ้าบีบแล้วไม่เล็กลง ใช้ต้นฉบับ
     };
     img.onerror=()=>res(dataUrl);
     img.src=dataUrl;
@@ -1204,7 +1209,7 @@ async function onShot(inp){
   for(const f of files){
     if(shots.length>=MAX_SHOTS){toast('เก็บได้สูงสุด '+MAX_SHOTS+' รูป','err');break}
     const raw=await new Promise(r=>{const rd=new FileReader();rd.onload=()=>r(rd.result);rd.readAsDataURL(f)});
-    shots.push(await shrink(raw,800,0.74));
+    shots.push(await shrink(raw,1000,0.7));   // ด้านยาวสุด 1000px — บัตรยังอ่านออก ไฟล์เล็กลงราว 3 เท่า
   }
   renderShots();
   toast('เพิ่มรูปแล้ว ('+shots.length+'/'+MAX_SHOTS+')','ok');

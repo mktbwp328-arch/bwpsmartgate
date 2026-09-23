@@ -217,10 +217,21 @@ function toVRow(v){return {id:v.id,name:v.name,company:v.company||null,phone:v.p
 function fromVRow(x){return {id:Number(x.id),name:x.name,company:x.company||'',phone:x.phone||'',dept:x.dept,
   purpose:x.purpose||'',addr:'',date:x.visit_date,dayKey:x.day_key,timeIn:x.time_in,timeOut:x.time_out,
   status:x.status,approvedBy:x.approved_by,registeredBy:x.registered_by||null,registeredByCode:x.registered_by_code||null,shots:photoCache[x.id]||(x.photos||undefined)}}
-async function vQuery(from,to){
+/* ดึงผู้มาติดต่อทีละหน้า และค้นหาที่ฐานข้อมูล (ไม่ดึงทั้งช่วงลงมากรองในเครื่อง)
+   ขอเกินมา 1 แถวเพื่อรู้ว่ายังมีต่อไหม โดยไม่ต้องสั่งนับ */
+const VIS_PAGE=200;
+async function vQuery(from,to,q,offset){
   if(!visTable)return null;
-  try{return (await sbFetch(`smartgate_visitors?select=${visCols()}&day_key=gte.${from}&day_key=lte.${to}&order=id.desc&limit=2000`)).map(fromVRow)}
-  catch(e){console.warn(e);return null}
+  offset=offset||0;
+  let url=`smartgate_visitors?select=${visCols()}&day_key=gte.${from}&day_key=lte.${to}`;
+  if(q){const s='*'+encodeURIComponent(q)+'*';
+    url+=`&or=(name.ilike.${s},company.ilike.${s},dept.ilike.${s},purpose.ilike.${s},phone.ilike.${s},approved_by.ilike.${s})`}
+  url+=`&order=id.desc&offset=${offset}&limit=${VIS_PAGE+1}`;
+  try{
+    const r=await sbFetch(url);
+    const more=r.length>VIS_PAGE;
+    return {rows:(more?r.slice(0,VIS_PAGE):r).map(fromVRow),more};
+  }catch(e){console.warn(e);return null}
 }
 /* ชุดที่ใช้งานประจำวัน: ของวันนี้ + รายที่ยังไม่ออก (ค้างจากวันก่อน)
    เล็กกว่าการดึงย้อนหลัง 45 วันมาก ทำให้ประหยัดเน็ตของทุกเครื่อง */
@@ -1366,15 +1377,29 @@ function repBar(kind){
     ${!vis&&!recTable?'<span style="font-size:12px;color:#A16207">⚠ ยังไม่ได้สร้างตารางประวัติ — แสดงเฉพาะข้อมูลในระบบเดิม</span>':''}
   </div>`;
 }
-let repVisRows=null,repVisLoading=false;
-async function repLoadVis(){
+let repVisRows=null,repVisLoading=false,repVisMore=false,repVisCapped=false;
+const VIS_MAX_DAYS=92;   // ช่วงรายงานผู้มาติดต่อสูงสุด 3 เดือน (กันดึงข้อมูลทีละมากๆ)
+/* ถ้าเลือกช่วงยาวเกิน ให้หดต้นทางเข้ามาเป็น 3 เดือนนับจากวันสิ้นสุด */
+function repClampVis(){
+  repDefaults();repVisCapped=false;
+  const a=new Date(repFrom),b=new Date(repTo);
+  if(isNaN(a)||isNaN(b))return;
+  if((b-a)/864e5>VIS_MAX_DAYS){
+    const s=new Date(b);s.setDate(s.getDate()-VIS_MAX_DAYS);
+    repFrom=dayKey(s);repVisCapped=true;repSave();
+  }
+}
+async function repLoadVis(more){
+  repClampVis();
   repVisLoading=true;render();
-  repVisRows=await vQuery(repFrom,repTo)||[];
+  const r=await vQuery(repFrom,repTo,repQ,more?(repVisRows||[]).length:0);
+  if(r){repVisRows=more?(repVisRows||[]).concat(r.rows):r.rows;repVisMore=r.more}
+  else if(!more){repVisRows=[];repVisMore=false}
   repVisLoading=false;render();
 }
 function repApplyVis(){
   repFrom=$('rep-from').value||repFrom;repTo=$('rep-to').value||repTo;repQ=$('rep-q').value.trim();
-  repSave();repVisRows=null;render();
+  repSave();repVisRows=null;repVisMore=false;render();
 }
 async function delRecord(id){
   if(id==null){toast('รายการนี้ยังไม่ถูกบันทึกลงฐานข้อมูล','err');return}
@@ -1419,16 +1444,18 @@ function reportVis(){
   // มีตารางแล้ว: ดึงเฉพาะช่วงที่เลือกจากฐานข้อมูล (ไม่รวมรูป จึงเบา)
   if(visTable&&repVisRows===null&&!repVisLoading){setTimeout(repLoadVis,0);
     return repBar('vis')+'<div class="card" style="padding:40px;text-align:center;color:var(--faint)">กำลังโหลด...</div>'}
-  if(repVisLoading)return repBar('vis')+'<div class="card" style="padding:40px;text-align:center;color:var(--faint)">กำลังโหลด...</div>';
+  if(repVisLoading&&repVisRows===null)return repBar('vis')+'<div class="card" style="padding:40px;text-align:center;color:var(--faint)">กำลังโหลด...</div>';
   const q=repQ.toLowerCase();
   const src=newestFirst(visTable?(repVisRows||[]):visitors);
-  const rows=src.filter(v=>{
+  // มีตารางแล้ว: ฐานข้อมูลกรองช่วงวันที่และคำค้นมาให้แล้ว ไม่ต้องกรองซ้ำ
+  const rows=visTable?src:src.filter(v=>{
     const k=v.dayKey||(v.id>1e12?dayKey(new Date(v.id)):null);   // รายการเก่า: ดึงวันที่จาก id (timestamp)
-    if(!visTable&&k&&(k<repFrom||k>repTo))return false;
+    if(k&&(k<repFrom||k>repTo))return false;
     return !q||[v.name,v.company,v.approvedBy,v.dept,v.purpose,v.phone].join(' ').toLowerCase().includes(q);
   });
   window._visRows=rows;
-  return repBar('vis')+`<div style="font-size:12.5px;color:var(--muted);margin-bottom:8px">พบ ${rows.length} รายการ</div>
+  return repBar('vis')+`<div style="font-size:12.5px;color:var(--muted);margin-bottom:8px">แสดง ${rows.length} รายการ${repVisMore?' (ยังมีต่อ)':''}</div>
+  ${repVisCapped?'<div style="font-size:12.5px;color:#A16207;background:#FEF9C3;border-radius:8px;padding:8px 12px;margin-bottom:10px">ℹ️ รายงานผู้มาติดต่อดูย้อนหลังได้ครั้งละไม่เกิน 3 เดือน — ปรับวันที่เริ่มต้นให้แล้ว ถ้าต้องการช่วงก่อนหน้า ให้เลื่อนวันที่สิ้นสุดย้อนไป</div>':''}
   <div class="card" style="overflow-x:auto"><table>
     <tr><th>วันที่</th><th>รูป</th><th>ชื่อ - นามสกุล</th><th>บริษัท</th><th>แผนกที่ติดต่อ</th><th>วัตถุประสงค์</th><th>ลงทะเบียนโดย</th><th>เข้า</th><th>ออก</th><th>สถานะ</th></tr>
     ${rows.map(v=>`<tr><td>${esc(v.date)}</td>
@@ -1440,7 +1467,10 @@ function reportVis(){
       <td>${v.registeredBy?esc(v.registeredBy):'<span style="color:var(--faint)">-</span>'}</td>
       <td>${v.timeIn||'-'}</td><td>${v.timeOut||'-'}</td>
       <td><span class="badge ${v.status==='ออกแล้ว'?'b-green':v.status==='รออนุมัติออก'?'b-yellow':'b-blue'}">${esc(v.status)}</span></td></tr>`).join('')||'<tr><td colspan="10" style="text-align:center;color:var(--faint);padding:30px">ไม่พบรายการในช่วงที่เลือก</td></tr>'}
-  </table></div>`;
+  </table></div>
+  ${repVisMore?`<div style="text-align:center;margin-top:12px">
+    <button class="btn-ghost" onclick="repLoadVis(true)" ${repVisLoading?'disabled':''}>${repVisLoading?'กำลังโหลด...':'โหลดเพิ่มอีก '+VIS_PAGE+' รายการ'}</button>
+    <div style="font-size:12px;color:var(--faint);margin-top:6px">โหลดทีละ ${VIS_PAGE} รายการเพื่อประหยัดเน็ต</div></div>`:''}`;
 }
 /* ---- ดูรูปจาก รปภ. ---- */
 function closePhoto(){$('photo-view').innerHTML='';closeZoom()}
@@ -1512,14 +1542,27 @@ function reportExport(){
     </div>
     <div class="card" style="padding:22px;display:flex;flex-direction:column;gap:10px">
       <div style="font-size:28px">🪪</div><div style="font-weight:700">รายงานผู้มาติดต่อ</div>
-      <div style="font-size:12.5px;color:var(--muted)">${visitors.length} รายการ · ชื่อ, บริษัท, ผู้ถูกติดต่อ, เวลาเข้า-ออก, สถานะ</div>
+      <div style="font-size:12.5px;color:var(--muted)">ตามช่วงวันที่ในแท็บผู้มาติดต่อ · ชื่อ, บริษัท, ผู้ถูกติดต่อ, เวลาเข้า-ออก, สถานะ</div>
       <button class="btn-green" onclick="exportCsv('vis')">⬇️ ส่งออก CSV</button>
     </div>
   </div>`;
 }
-function exportCsv(kind){
+async function exportCsv(kind){
   let head,lines,fname;
   if(kind==='vis'){
+    // ตารางในหน้าจอโหลดทีละหน้า แต่ไฟล์ CSV ต้องครบทั้งช่วง จึงไล่ดึงให้ครบก่อน
+    if(visTable){
+      repClampVis();
+      toast('กำลังรวบรวมข้อมูล...','ok');
+      const all=[];
+      for(let i=0;i<25;i++){
+        const r=await vQuery(repFrom,repTo,repQ,all.length);
+        if(!r)break;
+        all.push(...r.rows);
+        if(!r.more)break;
+      }
+      window._visRows=newestFirst(all);
+    }
     head='วันที่,ชื่อ,บริษัท,แผนกที่ติดต่อ,ผู้อนุมัติออก,วัตถุประสงค์,ลงทะเบียนโดย,เวลาเข้า,เวลาออก,สถานะ';
     lines=(window._visRows||visitors).map(v=>[v.date,v.name,v.company||'',v.dept,v.approvedBy||'',v.purpose||'',v.registeredBy||'',v.timeIn||'',v.timeOut||'',v.status]);
     fname='bwp-visitors.csv';

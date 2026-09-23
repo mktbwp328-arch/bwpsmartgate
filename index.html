@@ -1195,7 +1195,15 @@ function renderShots(){
 }
 /* แผนกที่เปิดให้ผู้มาติดต่อเลือก + ผู้ที่อนุมัติได้ในแผนกนั้น (กำหนดในหน้าตั้งค่า) */
 const approverMap=()=>settings.approvers||{};
-function deptList(){return Object.keys(approverMap())}
+/* แผนกที่ผู้มาติดต่อแจ้งบ่อย ให้ขึ้นก่อนในรายการเลือก ที่เหลือเรียงตามตัวอักษร */
+const DEPT_TOP=['ทรัพยากรบุคคล','จัดซื้อ','คลังสินค้า','ซ่อมบำรุง','บัญชี'];
+function deptRank(d){
+  const i=DEPT_TOP.findIndex(p=>(d||'').includes(p));
+  return i<0?DEPT_TOP.length:i;
+}
+function deptList(){
+  return Object.keys(approverMap()).sort((a,b)=>deptRank(a)-deptRank(b)||a.localeCompare(b,'th'));
+}
 function approversOf(dept){return (approverMap()[dept]||[])}
 async function saveVisitor(){
   const v=id=>$(id)?$(id).value.trim():'';

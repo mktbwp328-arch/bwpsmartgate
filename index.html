@@ -222,6 +222,24 @@ async function vQuery(from,to){
   try{return (await sbFetch(`smartgate_visitors?select=${visCols()}&day_key=gte.${from}&day_key=lte.${to}&order=id.desc&limit=2000`)).map(fromVRow)}
   catch(e){console.warn(e);return null}
 }
+/* ชุดที่ใช้งานประจำวัน: ของวันนี้ + รายที่ยังไม่ออก (ค้างจากวันก่อน)
+   เล็กกว่าการดึงย้อนหลัง 45 วันมาก ทำให้ประหยัดเน็ตของทุกเครื่อง */
+async function vWorking(){
+  if(!visTable)return null;
+  const q=`or=(day_key.eq.${dayKey()},status.neq.${encodeURIComponent('ออกแล้ว')})`;
+  try{return (await sbFetch(`smartgate_visitors?select=${visCols()}&${q}&order=id.desc&limit=500`)).map(fromVRow)}
+  catch(e){console.warn(e);return null}
+}
+/* นับจำนวนผู้มาติดต่อในช่วงหนึ่ง โดยไม่ต้องดึงข้อมูลลงมา (ตอบกลับ 0 ไบต์) */
+async function vCount(from,to){
+  if(!visTable)return null;
+  try{
+    const res=await fetch(SB_URL+`/rest/v1/smartgate_visitors?select=id&day_key=gte.${from}&day_key=lte.${to}`,
+      {headers:{apikey:SB_KEY,Authorization:'Bearer '+SB_KEY,Prefer:'count=exact',Range:'0-0'}});
+    const cr=res.headers.get('content-range')||'';
+    return Number(cr.split('/')[1])||0;
+  }catch(e){return null}
+}
 async function vInsert(v){
   if(!visTable)return false;
   try{await sbFetch('smartgate_visitors',{method:'POST',body:JSON.stringify([toVRow(v)])});
@@ -266,81 +284,77 @@ async function pushNow(key,data){
     await sbFetch('smartgate_store?on_conflict=key',{method:'POST',
       headers:{'Prefer':'resolution=merge-duplicates'},
       body:JSON.stringify([{key,data,updated_at:new Date().toISOString()}])});
-    window._sbStamp=null;   // บังคับให้รอบถัดไปดึงข้อมูลใหม่จริง
+    window._stamps=null;window._visStamp=null;   // บังคับให้รอบถัดไปดึงข้อมูลใหม่จริง
     return true;
   }catch(e){console.warn('push fail',e);return false}
   finally{sbPending--}
 }
+/* จำสิ่งที่ส่งขึ้น/รับลงมาล่าสุดของแต่ละก้อน เพื่อไม่ส่งซ้ำถ้าไม่ได้เปลี่ยนจริง
+   (เดิมการสแกนทุกครั้งส่งรายชื่อพนักงาน 20 KB ขึ้นไปทับ ทำให้ทุกเครื่องต้องโหลดใหม่ตาม) */
+const sbSeen={};
 function sbPush(key,data){
   if(!sbOnline)return;
+  const j=JSON.stringify(data);
+  if(sbSeen[key]===j)return;       // ไม่มีอะไรเปลี่ยน ไม่ต้องส่ง
+  sbSeen[key]=j;
   sbPending++;
   sbFetch('smartgate_store?on_conflict=key',{method:'POST',
     headers:{'Prefer':'resolution=merge-duplicates'},
     body:JSON.stringify([{key,data,updated_at:new Date().toISOString()}])
-  }).catch(e=>{console.warn('sync fail',e);toast('ซิงก์ไม่สำเร็จ — ข้อมูลถูกเก็บในเครื่องไว้ก่อน','err')})
+  }).catch(e=>{delete sbSeen[key];console.warn('sync fail',e);toast('ซิงก์ไม่สำเร็จ — ข้อมูลถูกเก็บในเครื่องไว้ก่อน','err')})
     .finally(()=>{sbPending--});
 }
 async function sbLoad(force){
   if(sbPending>0)return; // กำลังอัปโหลดอยู่ — อย่าเพิ่งดึงทับ (กันข้อมูลที่เพิ่งบันทึกหาย)
   try{
-    // เช็คก่อนว่ามีอะไรเปลี่ยนไหม (คิวรีเบา) ค่อยดึงข้อมูลเต็มซึ่งมีรูปถ่ายรวมอยู่ด้วย
-    if(!force){
-      const stamps=await sbFetch('smartgate_store?select=key,updated_at');
-      const sig=stamps.map(r=>r.key+':'+r.updated_at).sort().join('|');
-      if(sig===window._sbStamp){sbOnline=true;paintCloudDot();return}
-      window._sbStamp=sig;
+    // ตรวจครั้งเดียวต่อการเปิดแอปว่ามีตารางอะไรใช้ได้บ้าง (เดิมตรวจทุกรอบซิงก์)
+    if(!window._probed){
+      try{await sbFetch('smartgate_records?limit=1');recTable=true}catch(e){recTable=false}
+      try{await sbFetch('smartgate_visitors?limit=1');visTable=true}catch(e){visTable=false}
+      if(visTable){try{await sbFetch('smartgate_visitors?select=registered_by&limit=1');visRegBy=true}catch(e){visRegBy=false}}
+      window._probed=true;
     }
-    const rows=await sbFetch('smartgate_store?select=key,data');
+
+    // เช็คว่าก้อนไหนเปลี่ยนบ้าง (คิวรีเบามาก) แล้วดึงเฉพาะก้อนนั้น
+    const stamps=await sbFetch('smartgate_store?select=key,updated_at');
     sbOnline=true;
-    const m={};rows.forEach(r=>m[r.key]=r.data);
-    const j=JSON.stringify(m);
-    if(j===window._lastSync)return; // ไม่มีอะไรเปลี่ยน — ไม่ต้อง re-render (กันฟอร์มที่กำลังกรอกหาย)
-    window._lastSync=j;
-    // มีข้อมูลบนคลาวด์ → ใช้ของคลาวด์ / ยังไม่มี → อัปโหลดข้อมูลเครื่องนี้ขึ้นไปตั้งต้น
-    if(m.employees)employees=m.employees;else sbPush('employees',employees);
-    // ประวัติ: ใช้ตารางถ้ามี / ไม่มีก็ใช้ก้อน JSON แบบเดิม
-    try{await sbFetch('smartgate_records?limit=1');recTable=true}catch(e){recTable=false}
-    if(recTable){
-      const rows=await recLoadDay(dayKey());
-      if(rows){
-        if(!m.records_migrated&&Array.isArray(m.records)&&m.records.length){ // ย้ายข้อมูลเดิมขึ้นตารางครั้งเดียว
-          for(const r of m.records)await sbFetch('smartgate_records',{method:'POST',body:JSON.stringify([toRow(r)])}).catch(()=>{});
-          sbPush('records_migrated',true);sbPush('records',[]);
-          console.log('ย้ายประวัติเดิม '+m.records.length+' รายการขึ้นตารางแล้ว');
-        }
-        records=rows;
-      }
-    }else if(m.records)records=m.records;else sbPush('records',records);
-    // ผู้มาติดต่อ: ใช้ตารางถ้ามี / ไม่มีก็ใช้ก้อน JSON แบบเดิม
-    try{await sbFetch('smartgate_visitors?limit=1');visTable=true}catch(e){visTable=false}
-    if(visTable){try{await sbFetch('smartgate_visitors?select=registered_by&limit=1');visRegBy=true}catch(e){visRegBy=false}}
+    const stampNow={};stamps.forEach(r=>stampNow[r.key]=r.updated_at);
+    const changed=Object.keys(stampNow).filter(k=>force||!window._stamps||window._stamps[k]!==stampNow[k]);
+
+    // ผู้มาติดต่ออยู่คนละตาราง เช็คแยกด้วยเวลาที่แก้ล่าสุด (ตอบกลับไม่กี่ไบต์)
+    let visChanged=force||!window._visStamp;
     if(visTable){
-      if(!m.visitors_migrated&&Array.isArray(m.visitors)&&m.visitors.length){   // ย้ายข้อมูลเดิมขึ้นตารางครั้งเดียว
-        let n=0;
-        for(const v of m.visitors){
-          const row=toVRow({...v,shots:(v.shots&&v.shots.length)?v.shots:[v.photo,v.idcard].filter(Boolean),
-            dayKey:v.dayKey||(v.id>1e12?dayKey(new Date(v.id)):dayKey())});
-          if(await sbFetch('smartgate_visitors?on_conflict=id',{method:'POST',
-            headers:{'Prefer':'resolution=merge-duplicates'},body:JSON.stringify([row])}).then(()=>1).catch(()=>0))n++;
-        }
-        await sbFetch('smartgate_store?on_conflict=key',{method:'POST',headers:{'Prefer':'resolution=merge-duplicates'},
-          body:JSON.stringify([{key:'visitors_migrated',data:true,updated_at:new Date().toISOString()},
-                               {key:'visitors',data:[],updated_at:new Date().toISOString()}])}).catch(()=>{});
-        console.log('ย้ายผู้มาติดต่อเดิม '+n+' รายขึ้นตารางแล้ว');
-        window._sbStamp=null;window._lastSync=null;
-      }
-      const from=dayKey(new Date(Date.now()-45*864e5));   // เก็บไว้ใช้งาน 45 วันล่าสุด
-      const rows=await vQuery(from,dayKey());
-      if(rows)visitors=rows;
+      const last=await sbFetch('smartgate_visitors?select=updated_at&order=updated_at.desc&limit=1');
+      const cur=(last[0]&&last[0].updated_at)||'-';
+      if(cur!==window._visStamp){visChanged=true;window._visStamp=cur}
     }
-    else if(m.visitors)visitors=m.visitors;else sbPush('visitors',visitors);
-    if(m.settings)settings={...settings,...m.settings};else sbPush('settings',settings);
+    if(!changed.length&&!visChanged){paintCloudDot();return}   // ไม่มีอะไรเปลี่ยน จบแค่นี้
+    window._stamps=stampNow;
+
+    const m={};
+    if(changed.length){
+      const rows=await sbFetch('smartgate_store?select=key,data&key=in.('+changed.join(',')+')');
+      rows.forEach(r=>{m[r.key]=r.data;sbSeen[r.key]=JSON.stringify(r.data)});
+    }
+
+    if(m.employees)employees=m.employees;
+    if(m.settings)settings={...settings,...m.settings};
+
+    // ประวัติเข้า-ออกของวันนี้ (ใช้ตาราง)
+    if(recTable){const rows=await recLoadDay(dayKey());if(rows)records=rows}
+    else if(m.records)records=m.records;
+
+    // ผู้มาติดต่อ 45 วันล่าสุด — ดึงเมื่อมีการเปลี่ยนแปลงจริงเท่านั้น
+    if(visTable&&visChanged){
+      const rows=await vWorking();   // เอาเฉพาะของวันนี้และรายที่ยังไม่ออก
+      if(rows)visitors=rows;
+    }else if(!visTable&&m.visitors)visitors=m.visitors;
+
     save('employees',employees);save('records',records);save('visitors',visitors);save('settings',settings);
-    if(checkStillAllowed())return;   // ถูกระงับ/ลบ/ปิดรหัสกลาง — ออกจากระบบทันที
+    if(checkStillAllowed())return;   // ถูกระงับ/ลบ — ออกจากระบบทันที
     if($('app').classList.contains('hidden')){if(typeof bootSession==='function')bootSession()} // ข้อมูลเพิ่งมาถึง — ลองเข้าระบบอีกครั้ง
     else if(typingNow())pendingRender=true;   // กำลังกรอกฟอร์มอยู่ — ไว้วาดตอนพิมพ์เสร็จ
     else render();
-    console.log('Supabase sync: online');
   }catch(e){sbOnline=false;console.warn('เชื่อมต่อฐานข้อมูลไม่ได้ — ใช้ข้อมูลในเครื่อง')}
   paintCloudDot();
 }
@@ -355,9 +369,15 @@ function paintCloudDot(){
    หน้าที่ต้องเห็นผลทันที (ผู้มาติดต่อ / อนุมัติ) เช็คทุก 3 วิ · หน้าอื่นทุก 20 วิ
    คิวรีที่ใช้เช็คเบามาก (ดึงแค่ key กับเวลาแก้ไขล่าสุด) จึงถี่ได้โดยไม่เปลืองเน็ต */
 const FAST_PAGES=['visitor','approve','dash'];
+/* ความถี่ในการเช็คข้อมูลใหม่ — ไวตอนมีคนใช้งาน ช้าลงเมื่อวางเครื่องทิ้งไว้ (ประหยัดเน็ต)
+   แตะหน้าจอหรือสลับกลับมาที่แอป จะดึงข้อมูลทันทีและกลับมาไวอีกครั้ง */
 function syncEvery(){
   const p=(typeof cur==='undefined')?null:cur;   // ตอนบูตยังไม่มีตัวแปรหน้า
-  return FAST_PAGES.includes(p)?3000:20000;
+  if(!FAST_PAGES.includes(p))return 30000;
+  const quiet=Date.now()-(typeof lastAct==='undefined'?Date.now():lastAct);
+  if(quiet<2*60000)return 3000;      // กำลังใช้งานอยู่
+  if(quiet<10*60000)return 8000;     // เพิ่งวางไป
+  return 20000;                      // วางทิ้งไว้นาน
 }
 let syncTimer=null;
 function scheduleSync(){
@@ -407,7 +427,7 @@ let session=load('session',null);
 const persist=()=>{save('employees',employees);save('records',records);save('visitors',visitors);save('settings',settings);save('session',session);
   sbPush('employees',employees);sbPush('settings',settings);
   if(!recTable)sbPush('records',records);      // มีตารางแล้วไม่ต้องดันก้อน JSON ทับ
-  if(!visTable)sbPush('visitors',visitors)};
+};   // ผู้มาติดต่อและประวัติอยู่ในตารางแล้ว ไม่ต้องดันก้อน JSON
 
 /* ================= UTIL ================= */
 const $=id=>document.getElementById(id);
@@ -555,7 +575,11 @@ function checkStillAllowed(){
   return false;
 }
 let lastAct=Date.now();
-['click','keydown','touchstart','scroll'].forEach(e=>addEventListener(e,()=>{lastAct=Date.now()},{passive:true}));
+['click','keydown','touchstart','scroll'].forEach(e=>addEventListener(e,()=>{
+  const wasQuiet=Date.now()-lastAct>2*60000;
+  lastAct=Date.now();
+  if(wasQuiet&&sbOnline){sbLoad();scheduleSync()}   // กลับมาใช้งาน — ดึงข้อมูลทันทีและกลับมาเช็คถี่
+},{passive:true}));
 setInterval(()=>{
   if(!session||$('app').classList.contains('hidden'))return;
   if(session.at&&Date.now()-session.at>sessionMaxMs(session))
@@ -675,7 +699,10 @@ function pageDash(){
   const outs=todayRows.filter(r=>r.out).length;
   const ins=todayRows.filter(r=>r.in).length;
   const outNow=new Set(outRows.map(r=>r.code)).size;
-  const periodVisitors=visitors.filter(v=>{const k=v.dayKey||(v.id>1e12?dayKey(new Date(v.id)):null);const [f,t]=dashRange();return !k||(k>=f&&k<=t)});
+  const [pf,pt]=dashRange();
+  // นับจากฐานข้อมูลโดยตรง (ไม่ต้องดึงรายชื่อลงมา) ถ้ายังไม่ได้ค่าให้ใช้ที่นับจากชุดในเครื่องไปก่อน
+  const visCountLocal=visitors.filter(v=>{const k=v.dayKey||(v.id>1e12?dayKey(new Date(v.id)):null);return !k||(k>=pf&&k<=pt)}).length;
+  const periodVisitors={length:(dashVisCount!=null?dashVisCount:visCountLocal)};
   const stat=(bg,icon,label,val,unit,onclick,active)=>`
     <div class="stat" onclick="${onclick}" style="background:${bg};cursor:pointer;position:relative;transition:transform .12s;outline:${active?'3px solid rgba(255,255,255,.55)':'none'}" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='none'">
       <div style="font-size:13px;opacity:.9">${icon} ${label}</div>
@@ -792,16 +819,17 @@ function dashBar(){
   </div>`;
 }
 function dashSetMode(m){dashMode=m;dashSave();dashApply()}
-function dashApply(){dashSave();dashRows=null;dashChart=null;render()}
+function dashApply(){dashSave();dashRows=null;dashChart=null;dashVisCount=null;render()}
 function dashToReport(){const [f,t]=dashRange();repFrom=f;repTo=t;repQ='';repRows=null;reportTab='emp';save('reportTab','emp');repSave();go('report')}
 function minsSince(hhmm){if(!hhmm)return 0;const [h,m]=hhmm.split(':').map(Number);const n=new Date();return (n.getHours()*60+n.getMinutes())-(h*60+m)}
 function fmtDur(m){if(m<0)m=0;const h=Math.floor(m/60),x=m%60;return h?`${h} ชม. ${x} น.`:`${x} นาที`}
 function dashFocus(k){dashFocusKey=k;render();const el=document.querySelector('#pages .grid2');if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}
 function dashPickDay(k){dashMode='day';dashDay=k;dashApply()}
 function dashPickMonth(k){dashMode='month';dashMonth=k;dashApply()}
-async function dashReload(){dashRows=null;dashChart=null;render();await sbLoad();await loadDash();render();toast('อัปเดตข้อมูลแล้ว','ok')}
+async function dashReload(){dashRows=null;dashChart=null;dashVisCount=null;render();await sbLoad();await loadDash();render();toast('อัปเดตข้อมูลแล้ว','ok')}
 async function loadDash(){
   const [f,t]=dashRange();
+  dashVisCount=await vCount(f,t);
   dashRows=await recQuery(f,t,'')||records.filter(r=>!r.dayKey||(r.dayKey>=f&&r.dayKey<=t));
   // ---- ชุดข้อมูลกราฟ ----
   if(dashMode==='year'){
@@ -1350,7 +1378,7 @@ async function delRecord(id){
   if(!await recDelete(id))return;
   if(repRows)repRows=repRows.filter(x=>x.id!==id);
   records=records.filter(x=>x.id!==id);
-  save('records',records);dashRows=null;dashChart=null;render();
+  save('records',records);dashRows=null;dashChart=null;dashVisCount=null;render();
   toast('ลบรายการแล้ว','ok');
 }
 async function delRangeRecords(){
@@ -1362,7 +1390,7 @@ async function delRangeRecords(){
   const ids=new Set(rows.map(r=>r.id));
   repRows=repRows.filter(r=>!ids.has(r.id));
   records=records.filter(r=>!ids.has(r.id));
-  save('records',records);dashRows=null;dashChart=null;render();
+  save('records',records);dashRows=null;dashChart=null;dashVisCount=null;render();
   toast(`ลบแล้ว ${n} รายการ`,'ok');
 }
 function reportEmp(){

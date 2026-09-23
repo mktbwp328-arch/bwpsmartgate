@@ -191,7 +191,7 @@ function fromRow(x){return {type:'emp',id:x.id,code:x.emp_code,name:x.emp_name,d
 async function recInsert(r){
   if(!recTable)return;
   try{
-    const res=await sbFetch('smartgate_records',{method:'POST',headers:{'Prefer':'return=representation'},body:JSON.stringify([toRow(r)])});
+    const res=await sbFetch('smartgate_records?select=id',{method:'POST',headers:{'Prefer':'return=representation'},body:JSON.stringify([toRow(r)])});
     if(res&&res[0])r.id=res[0].id;
   }catch(e){console.warn('บันทึกประวัติไม่สำเร็จ',e);toast('บันทึกประวัติขึ้นระบบไม่สำเร็จ','err')}
 }
@@ -202,7 +202,7 @@ async function recUpdate(r){
 }
 async function recLoadDay(k){   // โหลดรายการของวันหนึ่งมาไว้ใช้งาน (สถานะเข้า-ออกวันนี้)
   if(!recTable)return null;
-  try{return (await sbFetch(`smartgate_records?day_key=eq.${k}&order=id.asc`)).map(fromRow)}catch(e){return null}
+  try{return (await sbFetch(`smartgate_records?select=id,emp_code,emp_name,dept,work_date,day_key,out_time,in_time&day_key=eq.${k}&order=id.asc`)).map(fromRow)}catch(e){return null}
 }
 /* ---- ผู้มาติดต่อ: เก็บเป็นตารางจริง หนึ่งแถวต่อหนึ่งคน ----
    รายการที่ดึงมาแสดง "ไม่รวมรูป" เพื่อให้เบา · รูปโหลดเฉพาะตอนกดดู */
@@ -270,7 +270,7 @@ async function recDelete(id){
 }
 async function recQuery(from,to,q){  // สำหรับหน้ารายงาน
   if(!recTable)return null;
-  let url=`smartgate_records?day_key=gte.${from}&day_key=lte.${to}&order=day_key.desc,id.desc&limit=3000`;
+  let url=`smartgate_records?select=id,emp_code,emp_name,dept,work_date,day_key,out_time,in_time&day_key=gte.${from}&day_key=lte.${to}&order=day_key.desc,id.desc&limit=3000`;
   if(q)url+=`&or=(emp_name.ilike.*${encodeURIComponent(q)}*,emp_code.ilike.*${encodeURIComponent(q)}*,dept.ilike.*${encodeURIComponent(q)}*)`;
   try{return (await sbFetch(url)).map(fromRow)}catch(e){console.warn(e);return null}
 }
@@ -309,8 +309,8 @@ async function sbLoad(force){
   try{
     // ตรวจครั้งเดียวต่อการเปิดแอปว่ามีตารางอะไรใช้ได้บ้าง (เดิมตรวจทุกรอบซิงก์)
     if(!window._probed){
-      try{await sbFetch('smartgate_records?limit=1');recTable=true}catch(e){recTable=false}
-      try{await sbFetch('smartgate_visitors?limit=1');visTable=true}catch(e){visTable=false}
+      try{await sbFetch('smartgate_records?select=id&limit=1');recTable=true}catch(e){recTable=false}
+      try{await sbFetch('smartgate_visitors?select=id&limit=1');visTable=true}catch(e){visTable=false}
       if(visTable){try{await sbFetch('smartgate_visitors?select=registered_by&limit=1');visRegBy=true}catch(e){visRegBy=false}}
       window._probed=true;
     }

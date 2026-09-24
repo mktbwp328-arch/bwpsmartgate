@@ -285,6 +285,70 @@ async function recQuery(from,to,q){  // สำหรับหน้าราย�
   if(q)url+=`&or=(emp_name.ilike.*${encodeURIComponent(q)}*,emp_code.ilike.*${encodeURIComponent(q)}*,dept.ilike.*${encodeURIComponent(q)}*)`;
   try{return (await sbFetch(url)).map(fromRow)}catch(e){console.warn(e);return null}
 }
+/* ---- รายชื่อพนักงาน: เก็บเป็นตารางจริง หนึ่งแถวต่อหนึ่งคน ----
+   เดิมเก็บรวมเป็นก้อนเดียว พอมีคนตั้ง PIN ทีเดียว ทุกเครื่องต้องโหลดใหม่ทั้งก้อน (~36 KB)
+   ตอนนี้ดึงเฉพาะแถวที่เปลี่ยนหลังจากรอบที่แล้ว (~0.3 KB) */
+let empTable=false;                       // true = ใช้ตาราง smartgate_employees ได้
+let empStamp=load('empStamp',null);        // เวลาที่แถวล่าสุดถูกแก้ ณ รอบซิงก์ก่อนหน้า
+function empRows(list){return list.map(e=>({code:e.code,data:e}))}   // เวลาแก้ไขให้เซิร์ฟเวอร์ใส่เอง
+function empPost(rows){
+  return sbFetch('smartgate_employees?on_conflict=code',{method:'POST',
+    headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(rows)});
+}
+/* บันทึกพนักงานบางคนขึ้นระบบ (ส่งเฉพาะคนที่แก้ ไม่ใช่ทั้งรายชื่อ) */
+function empSave(codes){
+  if(!empTable||!sbOnline)return;
+  const list=(Array.isArray(codes)?codes:[codes]).map(c=>employees.find(e=>e.code===c)).filter(Boolean);
+  if(!list.length)return;
+  sbPending++;
+  empPost(empRows(list))
+    .catch(e=>{console.warn('ซิงก์รายชื่อไม่สำเร็จ',e);toast('ซิงก์รายชื่อพนักงานไม่สำเร็จ — เก็บในเครื่องไว้แล้ว','err')})
+    .finally(()=>{sbPending--});
+}
+/* ลบพนักงาน: ทำเครื่องหมายไว้ เพื่อให้เครื่องอื่นรู้ว่าต้องเอาออกด้วย */
+function empRemove(code,name){
+  if(!empTable||!sbOnline)return;
+  sbPending++;
+  empPost([{code,data:{code,name:name||'',deleted:true}}])
+    .catch(e=>console.warn('ลบไม่สำเร็จ',e)).finally(()=>{sbPending--});
+}
+function applyEmpRows(rows,full){
+  const by=new Map((full?[]:employees).map(e=>[e.code,e]));
+  rows.forEach(r=>{
+    const d=r.data||{};
+    if(d.deleted)by.delete(r.code);
+    else by.set(r.code,{...d,code:r.code});
+  });
+  employees=[...by.values()];
+}
+/* ดึงเฉพาะที่เปลี่ยน — ครั้งแรกของเครื่องใหม่เท่านั้นที่ดึงทั้งหมด */
+async function empSync(force){
+  if(!empTable)return;
+  const last=await sbFetch('smartgate_employees?select=updated_at&order=updated_at.desc&limit=1');
+  const cur=(last[0]&&last[0].updated_at)||null;
+  if(!cur)return;                                   // ตารางยังว่าง
+  const full=force||!empStamp||!employees.length;
+  if(!full&&cur===empStamp)return;                  // ไม่มีใครแก้ ไม่ต้องโหลด
+  // ย้อนเผื่อ 10 วินาที กันแถวที่บันทึกพร้อมกันตกหล่น (ดึงซ้ำได้ ไม่เสียหาย)
+  const q=full?'':'&updated_at=gte.'+encodeURIComponent(new Date(new Date(empStamp).getTime()-10000).toISOString());
+  const rows=await sbFetch('smartgate_employees?select=code,data,updated_at'+q+'&order=updated_at.asc&limit=3000');
+  if(!rows)return;
+  applyEmpRows(rows,full);
+  empStamp=rows.reduce((a,r)=>r.updated_at>a?r.updated_at:a,full?cur:empStamp);
+  save('empStamp',empStamp);save('employees',employees);
+}
+/* ย้ายรายชื่อจากก้อน JSON เดิมเข้าตาราง — ทำครั้งเดียว */
+async function empMigrate(){
+  if(!empTable)return;
+  const has=await sbFetch('smartgate_employees?select=code&limit=1');
+  if(has&&has.length)return;                        // มีข้อมูลอยู่แล้ว
+  // ใช้รายชื่อบนระบบ ไม่ใช่ของในเครื่อง (ในเครื่องอาจเก่า)
+  const b=await sbFetch('smartgate_store?select=data&key=eq.employees');
+  const list=b&&b[0]&&Array.isArray(b[0].data)?b[0].data.filter(e=>e&&e.code):[];
+  if(!list.length)return;
+  await empPost(empRows(list));
+  console.log('ย้ายรายชื่อพนักงานเข้าตารางแล้ว',list.length,'คน');
+}
 let sbPending=0;
 /* ส่งขึ้นระบบทันทีและรอผล — ใช้กับงานที่อีกฝ่ายต้องเห็นเดี๋ยวนั้น เช่น อนุมัติผู้มาติดต่อ */
 async function pushNow(key,data){
@@ -323,6 +387,7 @@ async function sbLoad(force){
       try{await sbFetch('smartgate_records?select=id&limit=1');recTable=true}catch(e){recTable=false}
       try{await sbFetch('smartgate_visitors?select=id&limit=1');visTable=true}catch(e){visTable=false}
       if(visTable){try{await sbFetch('smartgate_visitors?select=registered_by&limit=1');visRegBy=true}catch(e){visRegBy=false}}
+      try{await sbFetch('smartgate_employees?select=code&limit=1');empTable=true}catch(e){empTable=false}
       window._probed=true;
     }
 
@@ -330,7 +395,17 @@ async function sbLoad(force){
     const stamps=await sbFetch('smartgate_store?select=key,updated_at');
     sbOnline=true;
     const stampNow={};stamps.forEach(r=>stampNow[r.key]=r.updated_at);
-    const changed=Object.keys(stampNow).filter(k=>force||!window._stamps||window._stamps[k]!==stampNow[k]);
+    // มีตารางพนักงานแล้ว ไม่ต้องโหลดก้อนรายชื่อเดิม (36 KB)
+    const changed=Object.keys(stampNow).filter(k=>!(empTable&&k==='employees')).filter(k=>force||!window._stamps||window._stamps[k]!==stampNow[k]);
+
+    // พนักงาน: ดึงเฉพาะคนที่ถูกแก้
+    let empChanged=false;
+    if(empTable){
+      if(!window._empMigrated){window._empMigrated=true;try{await empMigrate()}catch(e){console.warn('ย้ายรายชื่อไม่สำเร็จ',e)}}
+      const before=JSON.stringify(employees);
+      await empSync(force);
+      empChanged=JSON.stringify(employees)!==before;
+    }
 
     // ผู้มาติดต่ออยู่คนละตาราง เช็คแยกด้วยเวลาที่แก้ล่าสุด (ตอบกลับไม่กี่ไบต์)
     let visChanged=force||!window._visStamp;
@@ -339,7 +414,7 @@ async function sbLoad(force){
       const cur=(last[0]&&last[0].updated_at)||'-';
       if(cur!==window._visStamp){visChanged=true;window._visStamp=cur}
     }
-    if(!changed.length&&!visChanged){paintCloudDot();return}   // ไม่มีอะไรเปลี่ยน จบแค่นี้
+    if(!changed.length&&!visChanged&&!empChanged){paintCloudDot();return}   // ไม่มีอะไรเปลี่ยน จบแค่นี้
     window._stamps=stampNow;
 
     const m={};
@@ -348,7 +423,7 @@ async function sbLoad(force){
       rows.forEach(r=>{m[r.key]=r.data;sbSeen[r.key]=JSON.stringify(r.data)});
     }
 
-    if(m.employees)employees=m.employees;
+    if(m.employees&&!empTable)employees=m.employees;   // ยังไม่มีตาราง: ใช้ก้อนเดิม
     if(m.settings)settings={...settings,...m.settings};
 
     // ประวัติเข้า-ออกของวันนี้ (ใช้ตาราง)
@@ -436,7 +511,8 @@ let settings=load('settings',{...COMPANY_PIN});
 if(settings.lat==null){settings.lat=COMPANY_PIN.lat;settings.lng=COMPANY_PIN.lng} // เผื่อข้อมูลเก่าที่ยังไม่ได้ปักหมุด
 let session=load('session',null);
 const persist=()=>{save('employees',employees);save('records',records);save('visitors',visitors);save('settings',settings);save('session',session);
-  sbPush('employees',employees);sbPush('settings',settings);
+  if(!empTable)sbPush('employees',employees);   // มีตารางแล้ว บันทึกเป็นรายคนผ่าน empSave
+  sbPush('settings',settings);
   if(!recTable)sbPush('records',records);      // มีตารางแล้วไม่ต้องดันก้อน JSON ทับ
 };   // ผู้มาติดต่อและประวัติอยู่ในตารางแล้ว ไม่ต้องดันก้อน JSON
 
@@ -530,6 +606,7 @@ $('btn-login').onclick=async()=>{
     if(/^(\d)\1{5}$/.test(pin)||['123456','654321','012345'].includes(pin)){loginErr('รหัส PIN คาดเดาง่ายเกินไป — เลือกเลขอื่น');return}
     const emp=employees.find(e=>e.code===pendingEmp.code);
     emp.pinHash=await hashPin(emp.code,pin);
+    empSave(emp.code);
     startSession(emp.code);
     toast('ตั้งรหัส PIN เรียบร้อย — ครั้งต่อไปใช้รหัสนี้เข้าระบบ','ok');return;
   }
@@ -891,11 +968,11 @@ function resetPin(code){
   const e=employees.find(x=>x.code===code);
   if(!e.pinHash){toast(e.code+' ยังไม่ได้ตั้ง PIN','err');return}
   if(!confirm('รีเซ็ตรหัส PIN ของ '+e.name+' ?\nพนักงานจะตั้งรหัสใหม่เองตอนล็อกอินครั้งถัดไป'))return;
-  delete e.pinHash;persist();renderEmpTable();
+  delete e.pinHash;empSave(code);persist();renderEmpTable();
   toast('รีเซ็ต PIN ของ '+e.code+' แล้ว','ok');
 }
-function toggleEmp(code){const e=employees.find(x=>x.code===code);e.active=!e.active;persist();renderEmpTable();toast(`${e.code} → ${e.active?'Active พร้อมใช้งานที่จุดสแกน':'Inactive'}`,'ok')}
-function delEmp(code){if(!confirm('ลบพนักงาน '+code+' ?'))return;employees=employees.filter(e=>e.code!==code);persist();renderEmpTable()}
+function toggleEmp(code){const e=employees.find(x=>x.code===code);e.active=!e.active;empSave(code);persist();renderEmpTable();toast(`${e.code} → ${e.active?'Active พร้อมใช้งานที่จุดสแกน':'Inactive'}`,'ok')}
+function delEmp(code){if(!confirm('ลบพนักงาน '+code+' ?'))return;const g=employees.find(e=>e.code===code);employees=employees.filter(e=>e.code!==code);empRemove(code,g&&g.name);persist();renderEmpTable()}
 function empModal(code){
   const e=employees.find(x=>x.code===code)||{code:'',name:'',dept:'',pos:'',phone:'',active:true};
   $('modal-root').innerHTML=`<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal">
@@ -925,6 +1002,8 @@ function saveEmp(code){
     Object.assign(e,data);                   // คงสถานะ Active/Inactive และ PIN เดิมไว้
     delete e.role;                           // สิทธิ์ดูจากแผนกอย่างเดียว
   }else employees.push({...data,active:true});
+  if(code&&code!==data.code){const o=employees.find(x=>x.code===data.code);empRemove(code,o&&o.name)}   // เปลี่ยนรหัส: เอารหัสเดิมออก
+  empSave(data.code);
   persist();closeModal();renderEmpTable();
   toast((code?'บันทึกการแก้ไขแล้ว':'เพิ่มพนักงานแล้ว')+' — สิทธิ์: '+ROLE_LABEL[getRole(data)],'ok');
 }
@@ -941,12 +1020,13 @@ function importCsv(inp){
   rd.onload=()=>{
     // CSV จาก Excel ไทยมักเป็นรหัส windows-874 — ถ้าอ่านแล้วตัวอักษรเพี้ยน (�) ให้อ่านใหม่
     if(!retried&&rd.result.includes('�')){retried=true;rd.readAsText(f,'windows-874');return}
-    let n=0;
+    let n=0;const added=[];
     rd.result.split(/\r?\n/).forEach(line=>{
       const c=line.split(',').map(s=>s.trim());
       if(c.length>=2&&c[0]&&!/รหัส/.test(c[0])&&!employees.some(e=>e.code===c[0])){
-        employees.push({code:c[0],name:c[1]||'',dept:c[2]||'',pos:c[3]||'',phone:c[4]||'',active:true});n++;
+        employees.push({code:c[0],name:c[1]||'',dept:c[2]||'',pos:c[3]||'',phone:c[4]||'',active:true});added.push(c[0]);n++;
       }});
+    empSave(added);
     persist();renderEmpTable();toast(`นำเข้าแล้ว ${n} รายการ`,'ok');inp.value='';
   };
   rd.readAsText(f);

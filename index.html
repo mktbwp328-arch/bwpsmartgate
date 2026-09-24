@@ -643,7 +643,7 @@ const REMEMBER_DAYS=90;        // เลือกจดจำ: อยู่ใ�
 /* เริ่มเซสชัน — ใช้ร่วมกันทุกช่องทางเข้าระบบ */
 function startSession(code){
   const remember=$('login-remember')?$('login-remember').checked:true;
-  session={code,at:Date.now(),remember};
+  session={code,at:Date.now(),remember,pin:true};   // pin = เข้าด้วยเบอร์+PIN (ไม่ใช่รหัสกลางเดิม)
   if(remember)save('lastPhone',$('login-phone')?.value.trim()||'');   // เติมเบอร์ให้ครั้งหน้า
   persist();enterApp();
 }
@@ -652,7 +652,7 @@ function sessionMaxMs(s){return s&&s.remember?REMEMBER_DAYS*864e5:SESSION_MAX_H*
 function checkStillAllowed(){
   if(!session)return false;
   if(session.code==='ADMIN')return false;
-  if(session.code==='SEC001'){   // เครื่องที่เคยเข้าด้วยรหัส bwpsecurity ซึ่งยกเลิกแล้ว
+  if(session.code==='SEC001'&&!session.pin){   // เครื่องที่เคยเข้าด้วยรหัส bwpsecurity เดิม (รหัส SEC001 ใช้กับ รปภ. ตัวจริงได้แล้ว)
     doLogout('ยกเลิกการเข้าด้วยรหัส bwpsecurity แล้ว — รปภ. กรุณาเข้าด้วยเบอร์โทรและ PIN ของตัวเอง');return true;
   }
   const e=employees.find(x=>x.code===session.code);
@@ -1797,7 +1797,7 @@ function bootSession(){
   // เปิดแอปมาแล้วพบว่าบัญชีถูกระงับ/ลบ หรือรหัสกลางถูกปิด (ตามข้อมูลล่าสุดในเครื่อง) — ไม่ต้องเข้า
   if(session){
     const u=getUser(session.code);
-    const blocked=!u||(u.active===false)||session.code==='SEC001';   // SEC001 = รหัส bwpsecurity เดิม
+    const blocked=!u||(u.active===false)||(session.code==='SEC001'&&!session.pin);   // SEC001 ที่ไม่ได้เข้าด้วย PIN = รหัส bwpsecurity เดิม
     if(blocked){session=null;persist();return false}
   }
   if(session&&getUser(session.code)){
